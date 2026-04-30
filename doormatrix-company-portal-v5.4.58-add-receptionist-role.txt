@@ -2536,8 +2536,14 @@ class DoorMatrix_Company_Portal {
             array($this, 'render_admin_preview_inspections_page')
         );
 
+        $hidden_menu_parent = null;
+
+        /*
+         * Keep these utility routes registered for internal links while hiding them
+         * from the DoorMatrix sidebar to reduce admin menu clutter.
+         */
         add_submenu_page(
-            null,
+            $hidden_menu_parent,
             'Detailed Door Report Preview',
             'Detailed Door Report Preview',
             $cap,
@@ -2546,7 +2552,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            null,
+            $hidden_menu_parent,
             'Quick Safety Assessment Preview',
             'Quick Safety Assessment Preview',
             $cap,
@@ -2564,7 +2570,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            null,
+            $hidden_menu_parent,
             'Site Check Preview',
             'Site Check Preview',
             $cap,
@@ -2610,7 +2616,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            null,
+            $hidden_menu_parent,
             'Manage Team',
             'Manage Team',
             'manage_options',
