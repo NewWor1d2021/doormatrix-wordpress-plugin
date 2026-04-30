@@ -2537,7 +2537,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            self::MENU_SLUG,
+            null,
             'Detailed Door Report Preview',
             'Detailed Door Report Preview',
             $cap,
@@ -2546,7 +2546,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            self::MENU_SLUG,
+            null,
             'Quick Safety Assessment Preview',
             'Quick Safety Assessment Preview',
             $cap,
@@ -2564,7 +2564,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            self::MENU_SLUG,
+            null,
             'Site Check Preview',
             'Site Check Preview',
             $cap,
@@ -2610,7 +2610,7 @@ class DoorMatrix_Company_Portal {
         );
 
         add_submenu_page(
-            self::MENU_SLUG,
+            null,
             'Manage Team',
             'Manage Team',
             'manage_options',
