@@ -6244,7 +6244,7 @@ class DoorMatrix_Company_Portal {
     }
 
     private function current_user_is_sales() {
-        return current_user_can(self::SALES_ROLE) || current_user_can(self::STAFF_ROLE);
+        return current_user_can(self::SALES_ROLE);
     }
 
     private function current_user_is_helper() {
