@@ -17795,13 +17795,17 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             'inspection-forms'     => 'dmx-role-dashboard-tile-inspections',
             'tools'                => 'dmx-role-dashboard-tile-tools',
             'inventory'            => 'dmx-role-dashboard-tile-inventory',
-            'parts-library'        => 'dmx-role-dashboard-tile-inventory',
+            'parts-library'        => 'dmx-role-dashboard-tile-parts-library',
             'technician-efficiency'=> 'dmx-role-dashboard-tile-efficiency',
             'sales-graphs'         => 'dmx-role-dashboard-tile-sales-graphs',
             'team'                 => 'dmx-role-dashboard-tile-team',
             'manage-team'          => 'dmx-role-dashboard-tile-team',
             'assigned-jobs'        => 'dmx-role-dashboard-tile-work-orders',
-            'purchase-orders'      => 'dmx-role-dashboard-tile-suppliers',
+            'purchase-orders'      => 'dmx-role-dashboard-tile-purchase-orders',
+            'timesheets'           => 'dmx-role-dashboard-tile-timesheets',
+            'timesheet-approvals'  => 'dmx-role-dashboard-tile-timesheets',
+            'employee-timesheets'  => 'dmx-role-dashboard-tile-timesheets',
+            'commissions'          => 'dmx-role-dashboard-tile-commissions',
             'submit-invoice'       => 'dmx-role-dashboard-tile-expenses',
         );
 
@@ -24726,16 +24730,20 @@ private function render_inspections_tab($is_admin = false) {
         .dmx-role-dashboard-tile-reports{background:linear-gradient(135deg,#4f46e5 0%,#3730a3 100%)}
         .dmx-role-dashboard-tile-site-check{background:linear-gradient(135deg,#06b6d4 0%,#0f89a8 100%)}
         .dmx-role-dashboard-tile-suppliers{background:linear-gradient(135deg,#eab308 0%,#ca8a04 100%)}
+        .dmx-role-dashboard-tile-purchase-orders{background:linear-gradient(135deg,#f59e0b 0%,#b87500 100%)}
         .dmx-role-dashboard-tile-sales-schedule{background:linear-gradient(135deg,#db2777 0%,#9d174d 100%)}
         .dmx-role-dashboard-tile-technician-schedule{background:linear-gradient(135deg,#475569 0%,#334155 100%)}
         .dmx-role-dashboard-tile-equipment-scheduler{background:linear-gradient(135deg,#111827 0%,#374151 100%)}
         .dmx-role-dashboard-tile-messages{background:linear-gradient(135deg,#14b8a6 0%,#0f766e 100%)}
         .dmx-role-dashboard-tile-timecard{background:linear-gradient(135deg,#1d4ed8 0%,#0f2f63 100%)}
+        .dmx-role-dashboard-tile-timesheets{background:linear-gradient(135deg,#334155 0%,#0f172a 100%)}
         .dmx-role-dashboard-tile-inspections{background:linear-gradient(135deg,#334155 0%,#1e293b 100%)}
         .dmx-role-dashboard-tile-tools{background:linear-gradient(135deg,#0f766e 0%,#115e59 100%)}
         .dmx-role-dashboard-tile-inventory{background:linear-gradient(135deg,#65a30d 0%,#4d7c0f 100%)}
+        .dmx-role-dashboard-tile-parts-library{background:linear-gradient(135deg,#0f766e 0%,#115e59 100%)}
         .dmx-role-dashboard-tile-efficiency{background:linear-gradient(135deg,#0891b2 0%,#155e75 100%)}
         .dmx-role-dashboard-tile-sales-graphs{background:linear-gradient(135deg,#a855f7 0%,#7e22ce 100%)}
+        .dmx-role-dashboard-tile-commissions{background:linear-gradient(135deg,#d97706 0%,#92400e 100%)}
         .dmx-role-dashboard-tile-team{background:linear-gradient(135deg,#2563eb 0%,#1e3a8a 100%)}
         .dmx-grid{gap:16px}
         .dmx-panels{gap:18px}
