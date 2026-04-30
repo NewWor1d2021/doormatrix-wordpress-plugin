@@ -6269,7 +6269,12 @@ class DoorMatrix_Company_Portal {
             return true;
         }
 
-        return get_user_meta(get_current_user_id(), '_dmx_requested_role', true) === $role;
+        $current_user_id = get_current_user_id();
+        if ($current_user_id <= 0 || !$this->is_user_portal_approved($current_user_id)) {
+            return false;
+        }
+
+        return get_user_meta($current_user_id, '_dmx_requested_role', true) === $role;
     }
 
     private function current_user_is_supplier_request_sales_rep() {
