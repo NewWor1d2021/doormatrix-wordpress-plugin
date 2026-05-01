@@ -32496,6 +32496,43 @@ private function get_work_order_items_summary_html($work_order_id) {
                         <label>Work Order Number</label>
                         <input type="text" value="<?php echo esc_attr($edit_work_order ? $edit_work_order_meta['number'] : 'Auto-generated when saved'); ?>" readonly>
                     </div>
+                </div>
+
+                <div class="dmx-form-grid">
+                    <div class="dmx-field">
+                        <label>Customer Details</label>
+                        <select name="work_order_customer_id" id="dmx_work_order_customer_select">
+                            <option value="">Select saved customer to auto-fill</option>
+                            <?php foreach ($customer_lookup as $customer_option) :
+                                $customer_option_id = absint($customer_option['id'] ?? 0);
+                                $customer_option_name = trim((string) (($customer_option['company'] ?? '') !== '' ? $customer_option['company'] : ($customer_option['name'] ?? $customer_option['title'] ?? '')));
+                                $customer_option_meta = trim(implode(' • ', array_filter(array(
+                                    (string) ($customer_option['customer_number'] ?? ''),
+                                    (string) ($customer_option['name'] ?? ''),
+                                    (string) ($customer_option['phone'] ?? ''),
+                                    (string) ($customer_option['address_summary'] ?? ''),
+                                ))));
+                                if ($customer_option_name === '') {
+                                    $customer_option_name = 'Customer #' . $customer_option_id;
+                                }
+                            ?>
+                                <option value="<?php echo esc_attr($customer_option_id); ?>" <?php selected(absint($edit_work_order_meta['work_order_customer_id']), $customer_option_id); ?>><?php echo esc_html($customer_option_name . ($customer_option_meta !== '' ? ' - ' . $customer_option_meta : '')); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="dmx-inline-note">Select a saved customer to fill the bill-to, address, phone, attention, and service-site fields.</div>
+                    </div>
+                    <div class="dmx-field">
+                        <label>Quick Customer Search</label>
+                        <div class="dmx-work-order-part-lookup">
+                            <input type="text" name="work_order_customer_search" class="dmx-customer-search" data-customer-context="work_order" placeholder="Start typing customer, phone, email, or address" autocomplete="off" value="<?php echo esc_attr($edit_work_order_meta['work_order_bill_to_company']); ?>">
+                            <div class="dmx-work-order-part-results"></div>
+                        </div>
+                        <div class="dmx-inline-note">Typing here opens the same customer drop-down and auto-fills the work order when selected.</div>
+                        <?php if ($this->current_user_can_add_customers()) : ?><div class="dmx-inline-note"><a href="<?php echo esc_url($this->get_dashboard_url($is_admin, array('dmx_tab' => 'customers')) . '#dmx-add-customer'); ?>">Add Customer</a> in a new tab if this contact is not in your company list yet.</div><?php endif; ?>
+                    </div>
+                </div>
+
+                <div class="dmx-form-grid">
                     <div class="dmx-field">
                         <label>Work Order Title</label>
                         <input type="text" name="work_order_title" placeholder="Annual service - Calgary #16" required value="<?php echo esc_attr($edit_work_order_meta['title']); ?>">
@@ -32620,40 +32657,6 @@ private function get_work_order_items_summary_html($work_order_id) {
                         <div class="dmx-field"><label>Equipment Unit / Asset Name</label><input type="text" name="work_order_equipment_unit" placeholder="Example: Scissor Lift #1, Genie 45, Yard forklift" value="<?php echo esc_attr($edit_work_order_meta['work_order_equipment_unit']); ?>"></div>
                         <div class="dmx-field"><label>Rental Vendor</label><input type="text" name="work_order_equipment_vendor" placeholder="Example: United Rentals, Home Depot Rental" value="<?php echo esc_attr($edit_work_order_meta['work_order_equipment_vendor']); ?>"></div>
                         <div class="dmx-field"><label>Equipment Notes</label><input type="text" name="work_order_equipment_notes" placeholder="Delivery, pickup, height, surface, or access notes" value="<?php echo esc_attr($edit_work_order_meta['work_order_equipment_notes']); ?>"></div>
-                    </div>
-                </div>
-
-                <div class="dmx-form-grid">
-                    <div class="dmx-field">
-                        <label>Customer Details</label>
-                        <select name="work_order_customer_id" id="dmx_work_order_customer_select">
-                            <option value="">Select saved customer to auto-fill</option>
-                            <?php foreach ($customer_lookup as $customer_option) :
-                                $customer_option_id = absint($customer_option['id'] ?? 0);
-                                $customer_option_name = trim((string) (($customer_option['company'] ?? '') !== '' ? $customer_option['company'] : ($customer_option['name'] ?? $customer_option['title'] ?? '')));
-                                $customer_option_meta = trim(implode(' • ', array_filter(array(
-                                    (string) ($customer_option['customer_number'] ?? ''),
-                                    (string) ($customer_option['name'] ?? ''),
-                                    (string) ($customer_option['phone'] ?? ''),
-                                    (string) ($customer_option['address_summary'] ?? ''),
-                                ))));
-                                if ($customer_option_name === '') {
-                                    $customer_option_name = 'Customer #' . $customer_option_id;
-                                }
-                            ?>
-                                <option value="<?php echo esc_attr($customer_option_id); ?>" <?php selected(absint($edit_work_order_meta['work_order_customer_id']), $customer_option_id); ?>><?php echo esc_html($customer_option_name . ($customer_option_meta !== '' ? ' - ' . $customer_option_meta : '')); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <div class="dmx-inline-note">Select a saved customer to fill the bill-to, address, phone, attention, and service-site fields.</div>
-                    </div>
-                    <div class="dmx-field">
-                        <label>Quick Customer Search</label>
-                        <div class="dmx-work-order-part-lookup">
-                            <input type="text" name="work_order_customer_search" class="dmx-customer-search" data-customer-context="work_order" placeholder="Start typing customer, phone, email, or address" autocomplete="off" value="<?php echo esc_attr($edit_work_order_meta['work_order_bill_to_company']); ?>">
-                            <div class="dmx-work-order-part-results"></div>
-                        </div>
-                        <div class="dmx-inline-note">Typing here opens the same customer drop-down and auto-fills the work order when selected.</div>
-                        <?php if ($this->current_user_can_add_customers()) : ?><div class="dmx-inline-note"><a href="<?php echo esc_url($this->get_dashboard_url($is_admin, array('dmx_tab' => 'customers')) . '#dmx-add-customer'); ?>">Add Customer</a> in a new tab if this contact is not in your company list yet.</div><?php endif; ?>
                     </div>
                 </div>
 
