@@ -10847,7 +10847,7 @@ class DoorMatrix_Company_Portal {
 
         $work_order_id = absint($_POST['work_order_id'] ?? 0);
 
-        if ($work_order_id <= 0 || get_post_type($work_order_id) !== 'dm_work_order' || !current_user_can('edit_post', $work_order_id)) {
+        if ($work_order_id <= 0 || get_post_type($work_order_id) !== 'dm_work_order' || !current_user_can('edit_post', $work_order_id) || !$this->current_user_can_access_work_order($work_order_id)) {
             $this->redirect_with_message($tab, 'error', 'Could not find that work order to update.');
         }
 
@@ -11012,7 +11012,7 @@ private function reschedule_work_order($tab) {
 private function mark_work_order_scheduled_complete($tab) {
     $work_order_id = absint($_POST['work_order_id'] ?? 0);
 
-    if ($work_order_id <= 0 || get_post_type($work_order_id) !== 'dm_work_order') {
+    if ($work_order_id <= 0 || get_post_type($work_order_id) !== 'dm_work_order' || !$this->current_user_can_access_work_order($work_order_id)) {
         $this->redirect_with_message($tab, 'error', 'Could not find that work order.');
     }
 
