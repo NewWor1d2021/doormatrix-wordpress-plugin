@@ -7890,6 +7890,9 @@ class DoorMatrix_Company_Portal {
             case 'process_truck_inventory_request':
                 $this->process_truck_inventory_request($tab);
                 break;
+            case 'update_invoice_inventory_exception':
+                $this->update_invoice_inventory_exception($tab);
+                break;
             case 'create_supplier_request':
                 $this->create_supplier_request($tab);
                 break;
@@ -29334,6 +29337,10 @@ private function get_work_order_items_summary_html($work_order_id) {
             echo '</div>';
         }
 
+        if ($can_manage_inventory) {
+            echo $this->render_invoice_inventory_exceptions_panel($is_admin); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        }
+
         echo '<div class="dmx-form-card"><h4 class="dmx-panel-title">Current Inventory</h4>';
         if (empty($stock_lines)) {
             echo '<div class="dmx-empty">No inventory balances yet. Receive stock into a warehouse or truck to begin tracking inventory.</div>';
@@ -29381,6 +29388,138 @@ private function get_work_order_items_summary_html($work_order_id) {
         }        echo '</div>';
 
         return ob_get_clean();
+    }
+
+    private function get_invoice_inventory_exceptions() {
+        $rows = get_option('dmx_inventory_invoice_exceptions', array());
+        return is_array($rows) ? array_values($rows) : array();
+    }
+
+    private function save_invoice_inventory_exceptions($rows) {
+        $rows = is_array($rows) ? array_values($rows) : array();
+        update_option('dmx_inventory_invoice_exceptions', $rows, false);
+    }
+
+    private function render_invoice_inventory_exceptions_panel($is_admin = false) {
+        $company_key = $this->get_current_user_company_key();
+        $status_filter = sanitize_key($_GET['dmx_inventory_exception_status'] ?? '');
+        $allowed_filters = array('needs_review', 'resolved', 'ignored');
+        if (!in_array($status_filter, $allowed_filters, true)) {
+            $status_filter = '';
+        }
+
+        $location_map = $this->get_inventory_location_map();
+        $all_rows = $this->get_invoice_inventory_exceptions();
+        $rows = array();
+        foreach ($all_rows as $raw_index => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if (($row['company_key'] ?? '') !== $company_key) {
+                continue;
+            }
+            if ($status_filter !== '' && sanitize_key((string) ($row['status'] ?? 'needs_review')) !== $status_filter) {
+                continue;
+            }
+            $row['__index'] = (int) $raw_index;
+            $rows[] = $row;
+        }
+        usort($rows, function($a, $b) {
+            return strtotime((string) ($b['timestamp'] ?? '')) <=> strtotime((string) ($a['timestamp'] ?? ''));
+        });
+
+        ob_start();
+        echo '<div class="dmx-form-card"><h4 class="dmx-panel-title">Invoice Inventory Exceptions</h4>';
+        echo '<div class="dmx-inline-note" style="margin-bottom:10px;">Review invoice inventory shortages for assigned trucks. Mark each exception resolved or ignored, and add a note for audit history.</div>';
+        $base_url = $this->get_dashboard_url($is_admin, array('dmx_tab' => 'costs', 'dmx_subtab' => 'inventory'));
+        echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px;">';
+        echo '<a class="dmx-btn dmx-btn-secondary" href="' . esc_url($base_url) . '">All</a>';
+        echo '<a class="dmx-btn dmx-btn-secondary" href="' . esc_url(add_query_arg(array('dmx_inventory_exception_status' => 'needs_review'), $base_url)) . '">Needs Review</a>';
+        echo '<a class="dmx-btn dmx-btn-secondary" href="' . esc_url(add_query_arg(array('dmx_inventory_exception_status' => 'resolved'), $base_url)) . '">Resolved</a>';
+        echo '<a class="dmx-btn dmx-btn-secondary" href="' . esc_url(add_query_arg(array('dmx_inventory_exception_status' => 'ignored'), $base_url)) . '">Ignored</a>';
+        echo '</div>';
+
+        if (empty($rows)) {
+            echo '<div class="dmx-empty">No invoice inventory exceptions need review.</div></div>';
+            return ob_get_clean();
+        }
+
+        echo '<div class="dmx-table-wrap"><table class="dmx-table"><thead><tr><th>Status</th><th>Invoice</th><th>Technician</th><th>Assigned Truck</th><th>Part</th><th>Requested Qty</th><th>Recorded Truck Qty</th><th>Missing Qty</th><th>Timestamp</th><th>Actions</th></tr></thead><tbody>';
+        foreach ($rows as $row) {
+            $status = sanitize_key((string) ($row['status'] ?? 'needs_review'));
+            if (!in_array($status, $allowed_filters, true)) {
+                $status = 'needs_review';
+            }
+            $status_label = ucwords(str_replace('_', ' ', $status));
+            $invoice_id = absint($row['invoice_id'] ?? 0);
+            $invoice_label = $invoice_id > 0 ? 'Invoice #' . $invoice_id : 'Unknown invoice';
+            if ($invoice_id > 0 && get_post_type($invoice_id) === 'dm_invoice' && $this->post_matches_current_company($invoice_id) && $this->current_user_can_access_invoice($invoice_id)) {
+                $invoice_label = '<a href="' . esc_url($this->get_dashboard_url($is_admin, array('dmx_tab' => 'sales', 'dmx_subtab' => 'invoices', 'dmx_edit_invoice' => $invoice_id))) . '">' . esc_html($invoice_label) . '</a>';
+            } else {
+                $invoice_label = esc_html($invoice_label);
+            }
+            $truck_key = sanitize_key((string) ($row['assigned_truck_key'] ?? ''));
+            $truck_label = $truck_key !== '' && !empty($location_map[$truck_key]) ? $this->get_inventory_location_display_name($location_map[$truck_key]) : $truck_key;
+            $resolution_note = sanitize_text_field((string) ($row['resolution_note'] ?? ''));
+            echo '<tr>';
+            echo '<td><span class="dmx-pill ' . esc_attr($status === 'needs_review' ? 'dmx-pill-cancelled' : 'dmx-pill-complete') . '">' . esc_html($status_label) . '</span></td>';
+            echo '<td>' . $invoice_label . '</td>';
+            echo '<td>' . esc_html($this->get_inventory_user_label((int) ($row['technician_user_id'] ?? 0))) . '</td>';
+            echo '<td>' . esc_html((string) $truck_label) . '</td>';
+            echo '<td>' . esc_html((string) ($row['part_name'] ?? '')) . '</td>';
+            echo '<td>' . esc_html(number_format((float) ($row['requested_quantity'] ?? 0), 2)) . '</td>';
+            echo '<td>' . esc_html(number_format((float) ($row['recorded_quantity'] ?? 0), 2)) . '</td>';
+            echo '<td>' . esc_html(number_format((float) ($row['missing_quantity'] ?? 0), 2)) . '</td>';
+            echo '<td>' . esc_html(!empty($row['timestamp']) ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime((string) $row['timestamp'])) : '') . '</td>';
+            echo '<td><form method="post" style="display:grid;gap:6px;min-width:220px;">';
+            wp_nonce_field('dmx_portal_submit', 'dmx_nonce');
+            echo '<input type="hidden" name="dmx_portal_action" value="update_invoice_inventory_exception"><input type="hidden" name="dmx_tab" value="costs"><input type="hidden" name="dmx_subtab" value="inventory">';
+            echo '<input type="hidden" name="inventory_exception_index" value="' . esc_attr((string) ($row['__index'] ?? '')) . '">';
+            echo '<input type="text" name="inventory_exception_note" value="' . esc_attr($resolution_note) . '" placeholder="Add note (optional)">';
+            echo '<div style="display:flex;gap:6px;flex-wrap:wrap;"><button type="submit" class="dmx-btn" name="inventory_exception_action" value="resolved">Mark Resolved</button>';
+            echo '<button type="submit" class="dmx-btn dmx-btn-secondary" name="inventory_exception_action" value="ignored">Mark Ignored</button></div>';
+            echo '</form></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table></div></div>';
+        return ob_get_clean();
+    }
+
+    private function update_invoice_inventory_exception($tab) {
+        if (!$this->can_manage_inventory()) {
+            $this->redirect_with_message($tab, 'error', 'You do not have permission to review invoice inventory exceptions.');
+        }
+
+        $index = absint($_POST['inventory_exception_index'] ?? -1);
+        $action = sanitize_key($_POST['inventory_exception_action'] ?? '');
+        $note = sanitize_text_field(wp_unslash($_POST['inventory_exception_note'] ?? ''));
+        if ($index < 0 || !in_array($action, array('resolved', 'ignored'), true)) {
+            $this->redirect_with_message($tab, 'error', 'Invalid exception update request.');
+        }
+
+        $exceptions = $this->get_invoice_inventory_exceptions();
+        if (empty($exceptions[$index]) || !is_array($exceptions[$index])) {
+            $this->redirect_with_message($tab, 'error', 'Invoice inventory exception not found.');
+        }
+
+        $company_key = $this->get_current_user_company_key();
+        if (($exceptions[$index]['company_key'] ?? '') !== $company_key) {
+            $this->redirect_with_message($tab, 'error', 'This exception is outside your company scope.');
+        }
+
+        if ($action === 'resolved') {
+            $exceptions[$index]['status'] = 'resolved';
+            $exceptions[$index]['resolved_at'] = current_time('mysql');
+            $exceptions[$index]['resolved_by'] = get_current_user_id();
+        } else {
+            $exceptions[$index]['status'] = 'ignored';
+            $exceptions[$index]['ignored_at'] = current_time('mysql');
+            $exceptions[$index]['ignored_by'] = get_current_user_id();
+        }
+        $exceptions[$index]['resolution_note'] = $note;
+
+        $this->save_invoice_inventory_exceptions($exceptions);
+        $this->redirect_with_message($tab, 'success', $action === 'resolved' ? 'Invoice inventory exception marked resolved.' : 'Invoice inventory exception marked ignored.');
     }
 
     private function submit_truck_inventory_request($tab) {
