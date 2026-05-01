@@ -22503,24 +22503,108 @@ private function render_inspections_tab($is_admin = false) {
         return $summary;
     }
 
+    private function get_truck_key_for_technician_user($user_id, $location_map = null) {
+        $user_id = absint($user_id);
+        if ($user_id <= 0) {
+            return '';
+        }
+
+        if (!is_array($location_map)) {
+            $location_map = $this->get_inventory_location_map();
+        }
+
+        $truck_key = $this->get_user_assigned_truck_key($user_id);
+        if ($truck_key === '' || empty($location_map[$truck_key]) || ($location_map[$truck_key]['type'] ?? '') !== 'truck') {
+            return '';
+        }
+
+        return $truck_key;
+    }
+
+    private function resolve_invoice_inventory_usage_location_key($invoice_id, $line_items, $location_map = null) {
+        $invoice_id = absint($invoice_id);
+        if ($invoice_id <= 0) {
+            return '';
+        }
+
+        if (!is_array($location_map)) {
+            $location_map = $this->get_inventory_location_map();
+        }
+
+        $existing_location_key = sanitize_key((string) get_post_meta($invoice_id, '_dmx_inventory_usage_location_key', true));
+        if ($existing_location_key !== '' && !empty($location_map[$existing_location_key]) && ($location_map[$existing_location_key]['type'] ?? '') === 'truck') {
+            return $existing_location_key;
+        }
+
+        $source_work_order_id = absint(get_post_meta($invoice_id, '_dmx_source_work_order_id', true));
+        if ($source_work_order_id > 0 && get_post_type($source_work_order_id) === 'dm_work_order') {
+            $work_order_technician_ids = array();
+            $work_order_completed_by = absint(get_post_meta($source_work_order_id, '_dmx_work_order_completed_by', true));
+            $work_order_primary = absint(get_post_meta($source_work_order_id, '_dmx_work_order_primary_technician', true));
+            $work_order_additional = get_post_meta($source_work_order_id, '_dmx_work_order_additional_technicians', true);
+            if (!is_array($work_order_additional)) {
+                $work_order_additional = array();
+            }
+
+            if ($work_order_completed_by > 0) {
+                $work_order_technician_ids[] = $work_order_completed_by;
+            }
+            if ($work_order_primary > 0) {
+                $work_order_technician_ids[] = $work_order_primary;
+            }
+            foreach ($work_order_additional as $additional_id) {
+                $additional_id = absint($additional_id);
+                if ($additional_id > 0) {
+                    $work_order_technician_ids[] = $additional_id;
+                }
+            }
+
+            foreach (array_values(array_unique($work_order_technician_ids)) as $technician_id) {
+                $truck_key = $this->get_truck_key_for_technician_user($technician_id, $location_map);
+                if ($truck_key !== '') {
+                    return $truck_key;
+                }
+            }
+        }
+
+        $invoice_post = get_post($invoice_id);
+        if ($invoice_post instanceof WP_Post) {
+            $author_id = absint($invoice_post->post_author);
+            if ($author_id > 0) {
+                $truck_key = $this->get_truck_key_for_technician_user($author_id, $location_map);
+                if ($truck_key !== '') {
+                    return $truck_key;
+                }
+            }
+        }
+
+        if ($this->current_user_is_technician()) {
+            $truck_key = $this->get_truck_key_for_technician_user(get_current_user_id(), $location_map);
+            if ($truck_key !== '') {
+                return $truck_key;
+            }
+        }
+
+        return '';
+    }
+
     private function sync_invoice_inventory_usage($invoice_id, $line_items) {
         $invoice_id = absint($invoice_id);
         if ($invoice_id <= 0) {
             return true;
         }
 
-        $previous_location_key = sanitize_key((string) get_post_meta($invoice_id, '_dmx_inventory_usage_location_key', true));
-        $location_key = $previous_location_key;
-
-        if ($location_key === '' && $this->current_user_is_technician()) {
-            $location_key = $this->get_user_assigned_truck_key(get_current_user_id());
-        }
+        $location_map = $this->get_inventory_location_map();
+        $location_key = $this->resolve_invoice_inventory_usage_location_key($invoice_id, $line_items, $location_map);
 
         if ($location_key === '') {
+            $desired_usage = $this->get_invoice_inventory_usage_summary($line_items);
+            if (!empty($desired_usage)) {
+                return new WP_Error('dmx_inventory_truck_required', 'A technician truck is required to deduct invoice inventory. Assign a truck to the linked work order technician or invoice technician before saving.');
+            }
             return true;
         }
 
-        $location_map = $this->get_inventory_location_map();
         if (empty($location_map[$location_key]) || ($location_map[$location_key]['type'] ?? '') !== 'truck') {
             return true;
         }
@@ -29305,8 +29389,8 @@ private function get_work_order_items_summary_html($work_order_id) {
         $current_user_id = get_current_user_id();
 
         if ($decision === 'approve') {
-            if (in_array($current_status, array('fulfilled', 'rejected'), true)) {
-                $this->redirect_with_message($tab, 'error', 'This request can no longer be approved.');
+            if ($current_status !== 'requested') {
+                $this->redirect_with_message($tab, 'error', 'Only requested truck replenishment requests can be approved.');
             }
             $requests[$request_index]['status'] = 'approved';
             $requests[$request_index]['approved_by'] = $current_user_id;
@@ -29319,8 +29403,8 @@ private function get_work_order_items_summary_html($work_order_id) {
         }
 
         if ($decision === 'reject') {
-            if ($current_status === 'fulfilled') {
-                $this->redirect_with_message($tab, 'error', 'Fulfilled requests cannot be rejected.');
+            if (!in_array($current_status, array('requested', 'approved'), true)) {
+                $this->redirect_with_message($tab, 'error', 'Only requested or approved truck replenishment requests can be rejected.');
             }
             $requests[$request_index]['status'] = 'rejected';
             $requests[$request_index]['rejected_by'] = $current_user_id;
