@@ -6373,6 +6373,7 @@ class DoorMatrix_Company_Portal {
         return current_user_can('manage_options')
             || $this->current_user_is_portal_manager()
             || $this->current_user_is_coordinator()
+            || $this->current_user_is_technician()
             || $this->current_user_is_accounting()
             || $this->current_user_is_warehouse()
             || $this->current_user_is_parts();
@@ -7882,6 +7883,9 @@ class DoorMatrix_Company_Portal {
                 break;
             case 'use_inventory_stock':
                 $this->use_inventory_stock($tab);
+                break;
+            case 'submit_truck_inventory_request':
+                $this->submit_truck_inventory_request($tab);
                 break;
             case 'create_supplier_request':
                 $this->create_supplier_request($tab);
@@ -28955,6 +28959,11 @@ private function get_work_order_items_summary_html($work_order_id) {
         ob_start();
 
         $inventory_view = sanitize_key($_GET['dmx_inventory_view'] ?? '');
+        if ($this->current_user_is_technician() && !current_user_can('manage_options') && !$this->current_user_is_portal_manager()) {
+            echo $this->render_technician_assigned_truck_inventory_view($locations, $balances, $parts, $is_admin);
+            return ob_get_clean();
+        }
+
         if ($inventory_view === 'truck_scheduling' && $this->current_user_is_coordinator() && !current_user_can('manage_options') && !$this->current_user_is_portal_manager()) {
             echo $this->render_coordinator_truck_inventory_scheduling_view($locations, $balances, $parts, $is_admin);
             return ob_get_clean();
@@ -29123,6 +29132,134 @@ private function get_work_order_items_summary_html($work_order_id) {
             echo '</tbody></table></div>';
         }        echo '</div>';
 
+        return ob_get_clean();
+    }
+
+    private function submit_truck_inventory_request($tab) {
+        if (!$this->current_user_is_technician() || current_user_can('manage_options') || $this->current_user_is_portal_manager()) {
+            $this->redirect_with_message($tab, 'error', 'Only technicians can submit truck inventory requests from this view.');
+        }
+
+        $truck_key = $this->get_user_assigned_truck_key(get_current_user_id());
+        $location_map = $this->get_inventory_location_map();
+        if ($truck_key === '' || empty($location_map[$truck_key]) || ($location_map[$truck_key]['type'] ?? '') !== 'truck') {
+            $this->redirect_with_message($tab, 'error', 'No assigned truck was found for your account. Ask your manager to assign your truck first.');
+        }
+
+        $part_id = absint($_POST['truck_inventory_request_part_id'] ?? 0);
+        $quantity = (float) ($_POST['truck_inventory_request_quantity'] ?? 0);
+        $notes = sanitize_text_field(wp_unslash($_POST['truck_inventory_request_notes'] ?? ''));
+
+        if ($part_id <= 0 || get_post_type($part_id) !== self::PART_POST_TYPE) {
+            $this->redirect_with_message($tab, 'error', 'Please select a valid part for the truck request.');
+        }
+        if ($quantity <= 0) {
+            $this->redirect_with_message($tab, 'error', 'Please enter a requested quantity greater than zero.');
+        }
+
+        $requests = get_option('dmx_truck_inventory_requests', array());
+        if (!is_array($requests)) {
+            $requests = array();
+        }
+
+        $requests[] = array(
+            'id' => uniqid('truck_req_', true),
+            'created_at' => current_time('mysql'),
+            'company_key' => $this->get_current_user_company_key(),
+            'requested_by_user_id' => get_current_user_id(),
+            'requested_by_name' => wp_get_current_user()->display_name,
+            'part_id' => $part_id,
+            'part_name' => get_the_title($part_id),
+            'truck_key' => $truck_key,
+            'truck_label' => $this->get_inventory_location_display_name($location_map[$truck_key]),
+            'quantity' => $quantity,
+            'notes' => $notes,
+            'status' => 'requested',
+        );
+
+        update_option('dmx_truck_inventory_requests', $requests, false);
+        $this->redirect_with_message($tab, 'success', 'Truck inventory replenishment request submitted.');
+    }
+
+    private function render_technician_assigned_truck_inventory_view($locations, $balances, $parts, $is_admin = false) {
+        $truck_key = $this->get_user_assigned_truck_key(get_current_user_id());
+        $location_map = $this->get_inventory_location_map();
+        $truck = ($truck_key !== '' && !empty($location_map[$truck_key]) && ($location_map[$truck_key]['type'] ?? '') === 'truck') ? $location_map[$truck_key] : null;
+
+        $inventory_search = '';
+        if (isset($_GET['dmx_inventory_search'])) {
+            $inventory_search = sanitize_text_field(wp_unslash($_GET['dmx_inventory_search']));
+        }
+
+        $stock_rows = array();
+        if ($truck) {
+            foreach ($parts as $part) {
+                $qty = isset($balances[$part->ID][$truck_key]) ? (float) $balances[$part->ID][$truck_key] : 0;
+                if ($qty <= 0) {
+                    continue;
+                }
+                $internal_sku = (string) get_post_meta($part->ID, '_dmx_part_internal_sku', true);
+                $supplier_sku = (string) get_post_meta($part->ID, '_dmx_part_supplier_sku', true);
+                $haystack = strtolower($part->post_title . ' ' . $internal_sku . ' ' . $supplier_sku);
+                if ($inventory_search !== '' && strpos($haystack, strtolower($inventory_search)) === false) {
+                    continue;
+                }
+                $stock_rows[] = array(
+                    'part_id' => $part->ID,
+                    'part_name' => $part->post_title,
+                    'internal_sku' => $internal_sku,
+                    'supplier_sku' => $supplier_sku,
+                    'qty' => $qty,
+                    'is_low' => $qty <= $this->get_inventory_low_stock_threshold($part->ID),
+                );
+            }
+        }
+
+        $inventory_search_action = $is_admin ? admin_url('admin.php') : $this->get_portal_page_url();
+        ob_start();
+        ?>
+        <div class="dmx-page-head">
+            <div>
+                <h3>My Assigned Truck Inventory</h3>
+                <p>Read-only truck stock view. Receiving, transfers, adjustments, and manual stock deductions are managed by managers, warehouse, or parts roles.</p>
+            </div>
+        </div>
+        <?php if (!$truck) : ?>
+            <div class="dmx-message dmx-message-error">No truck is assigned to your account yet. Ask your manager to assign your truck before using inventory and part replenishment requests.</div>
+        <?php else : ?>
+            <div class="dmx-form-card">
+                <h4 class="dmx-panel-title">Assigned Truck</h4>
+                <p><strong><?php echo esc_html($this->get_inventory_location_display_name($truck)); ?></strong></p>
+            </div>
+            <div class="dmx-form-card">
+                <h4 class="dmx-panel-title">Search My Truck Stock</h4>
+                <form method="get" action="<?php echo esc_url($inventory_search_action); ?>" class="dmx-form-grid-3" style="align-items:end;">
+                    <?php if ($is_admin) : ?><input type="hidden" name="page" value="<?php echo esc_attr(self::MENU_SLUG); ?>"><?php endif; ?>
+                    <input type="hidden" name="dmx_tab" value="costs"><input type="hidden" name="dmx_subtab" value="inventory">
+                    <div class="dmx-field" style="grid-column:span 2;"><label>Part / SKU Search</label><input type="text" name="dmx_inventory_search" value="<?php echo esc_attr($inventory_search); ?>" placeholder="Part name, internal SKU, supplier SKU"></div>
+                    <div class="dmx-action-row" style="margin-bottom:14px;"><button type="submit" class="dmx-btn">Search</button></div>
+                </form>
+                <?php if (empty($stock_rows)) : ?>
+                    <div class="dmx-empty"><?php echo $inventory_search === '' ? 'No stock is currently recorded on your assigned truck.' : 'No matching parts were found on your assigned truck.'; ?></div>
+                <?php else : ?>
+                    <div class="dmx-table-wrap"><table class="dmx-table"><thead><tr><th>Part</th><th>Internal SKU</th><th>Supplier SKU</th><th>Qty</th><th>Status</th></tr></thead><tbody>
+                        <?php foreach ($stock_rows as $row) : ?><tr><td><?php echo esc_html($row['part_name']); ?></td><td><?php echo esc_html($row['internal_sku'] ?: '—'); ?></td><td><?php echo esc_html($row['supplier_sku'] ?: '—'); ?></td><td><?php echo esc_html(number_format((float) $row['qty'], 2)); ?></td><td><?php echo $row['is_low'] ? '<span class="dmx-pill dmx-pill-cancelled">Low</span>' : '<span class="dmx-pill dmx-pill-complete">OK</span>'; ?></td></tr><?php endforeach; ?>
+                    </tbody></table></div>
+                <?php endif; ?>
+            </div>
+            <div class="dmx-form-card">
+                <h4 class="dmx-panel-title">Request Truck Replenishment</h4>
+                <form method="post" class="dmx-form-grid-3">
+                    <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
+                    <input type="hidden" name="dmx_portal_action" value="submit_truck_inventory_request"><input type="hidden" name="dmx_tab" value="costs"><input type="hidden" name="dmx_subtab" value="inventory">
+                    <div class="dmx-field"><label>Part</label><select name="truck_inventory_request_part_id"><option value="">Select part</option><?php foreach ($parts as $part) : ?><option value="<?php echo esc_attr($part->ID); ?>"><?php echo esc_html($part->post_title); ?></option><?php endforeach; ?></select></div>
+                    <div class="dmx-field"><label>Requested Qty</label><input type="number" step="0.01" min="0.01" name="truck_inventory_request_quantity"></div>
+                    <div class="dmx-field"><label>Notes</label><input type="text" name="truck_inventory_request_notes" placeholder="Why needed / job reference"></div>
+                    <div class="dmx-action-row"><button type="submit" class="dmx-btn">Submit Request</button></div>
+                </form>
+            </div>
+        <?php endif; ?>
+        <?php
         return ob_get_clean();
     }
 
