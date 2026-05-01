@@ -36060,6 +36060,9 @@ private function get_work_order_items_summary_html($work_order_id) {
         if ($po_id <= 0) {
             $this->redirect_with_message('subcontractors', 'error', 'Could not find that PO.');
         }
+        if (get_post_type($po_id) !== 'dm_subcontractor_po') {
+            $this->redirect_with_message('subcontractors', 'error', 'Could not find that PO.');
+        }
         if (!current_user_can('manage_options')) {
             $company_key = $this->get_current_user_company_key();
             if ($company_key === '' || (string) get_post_meta($po_id, '_dmx_company_key', true) !== $company_key) {
@@ -36077,6 +36080,9 @@ private function get_work_order_items_summary_html($work_order_id) {
         $invoice_id = absint($_POST['scinv_id'] ?? 0);
         $status = sanitize_key($_POST['scinv_status'] ?? 'submitted');
         if ($invoice_id <= 0) {
+            $this->redirect_with_message('subcontractors', 'error', 'Could not find that subcontractor invoice.');
+        }
+        if (get_post_type($invoice_id) !== 'dm_subcontractor_invoice') {
             $this->redirect_with_message('subcontractors', 'error', 'Could not find that subcontractor invoice.');
         }
         if (!current_user_can('manage_options')) {
