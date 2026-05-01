@@ -6717,7 +6717,9 @@ class DoorMatrix_Company_Portal {
         update_user_meta($user_id, '_dmx_email_verified', 'no');
         update_user_meta($user_id, '_dmx_email_verified_at', '');
 
-        $this->issue_company_signup_email_verification_code($user_id, true);
+        if (!$this->issue_company_signup_email_verification_code($user_id, true)) {
+            $this->redirect_to_signup_target('error', 'Verification email could not be sent. Please contact DoorMatrix support.', 'verify', $user_id);
+        }
         $this->notify_owner_of_pending_account_request($user_id);
         $this->notify_user_account_request_received($user_id, true);
 
@@ -6750,8 +6752,7 @@ class DoorMatrix_Company_Portal {
         update_user_meta($user_id, '_dmx_email_verify_last_sent_at', current_time('mysql'));
         $subject = 'DoorMatrix verification code';
         $message = "Your DoorMatrix verification code is: {$code}\n\nThis code expires in 15 minutes.";
-        wp_mail($user->user_email, $subject, $message);
-        return true;
+        return wp_mail($user->user_email, $subject, $message);
     }
 
     private function handle_company_email_verification() {
@@ -6798,8 +6799,13 @@ class DoorMatrix_Company_Portal {
         if ($user_id <= 0) {
             $this->redirect_to_signup_target('error', 'Verification request is invalid.', 'company');
         }
-        if (!$this->issue_company_signup_email_verification_code($user_id, false)) {
+        $meta = $this->get_company_signup_verification_meta($user_id);
+        $last_sent_ts = $meta['last_sent_at'] ? strtotime($meta['last_sent_at']) : 0;
+        if ($last_sent_ts > 0 && (current_time('timestamp') - $last_sent_ts) < 60) {
             $this->redirect_to_signup_target('error', 'Please wait before requesting another code.', 'verify', $user_id);
+        }
+        if (!$this->issue_company_signup_email_verification_code($user_id, false)) {
+            $this->redirect_to_signup_target('error', 'Verification email could not be sent. Please contact DoorMatrix support.', 'verify', $user_id);
         }
         $this->redirect_to_signup_target('success', 'A new verification code was sent to your email.', 'verify', $user_id);
     }
@@ -7883,20 +7889,49 @@ class DoorMatrix_Company_Portal {
         if (user_can($user, 'manage_options')) {
             return true;
         }
+        $status = (string) get_user_meta($user_id, '_dmx_account_status', true);
+        if ($status === 'approved') {
+            return true;
+        }
         if ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes' && (string) get_user_meta($user_id, '_dmx_email_verified', true) !== 'yes') {
             return false;
         }
-        $status = get_user_meta($user_id, '_dmx_account_status', true);
         if ($status === '') {
             return true;
         }
         return $status === 'approved';
     }
 
+    private function user_has_active_or_trial_company_access($user_id, $user = null) {
+        $user_id = absint($user_id);
+        if ($user_id <= 0) {
+            return false;
+        }
+        if (!$user instanceof WP_User) {
+            $user = get_userdata($user_id);
+        }
+        if (!$user) {
+            return false;
+        }
+        $company_key = (string) get_user_meta($user_id, '_dmx_company_key', true);
+        if ($company_key === '') {
+            return false;
+        }
+        $trial_data = $this->get_company_trial_data($company_key);
+        if (!in_array((string) ($trial_data['status'] ?? ''), array('active', 'trial', 'legacy'), true)) {
+            return false;
+        }
+        $role_keys = $this->get_portal_role_keys();
+        return !empty(array_intersect((array) $user->roles, $role_keys));
+    }
+
     public function block_unapproved_portal_login($user, $username, $password) {
         if ($user instanceof WP_User) {
             $is_portal_user = array_intersect((array) $user->roles, array(self::MANAGER_ROLE, self::ACCOUNTING_ROLE, self::STAFF_ROLE, self::SALES_ROLE, self::COORDINATOR_ROLE, self::TECHNICIAN_ROLE, self::WAREHOUSE_ROLE, self::PARTS_ROLE, self::RECEPTIONIST_ROLE, self::SUBCONTRACTOR_ROLE));
             if (!empty($is_portal_user) && !$this->is_user_portal_approved($user->ID)) {
+                if ($this->user_has_active_or_trial_company_access($user->ID, $user)) {
+                    return $user;
+                }
                 $status = (string) get_user_meta($user->ID, '_dmx_account_status', true);
                 $message = 'Your DoorMatrix account is pending DoorMatrix admin approval.';
                 if ($status === 'inactive') {
@@ -8133,6 +8168,9 @@ class DoorMatrix_Company_Portal {
                 break;
             case 'approve_team_member':
                 $this->approve_team_member($tab);
+                break;
+            case 'admin_mark_owner_email_verified':
+                $this->admin_mark_owner_email_verified($tab);
                 break;
             case 'deny_team_member':
                 $this->deny_team_member($tab);
@@ -8589,6 +8627,25 @@ class DoorMatrix_Company_Portal {
         $this->notify_user_account_denied($user_id);
 
         $this->redirect_with_message('staff', 'success', 'Portal account request rejected.');
+    }
+
+    private function admin_mark_owner_email_verified($tab) {
+        if (!current_user_can('manage_options')) {
+            $this->redirect_with_message('staff', 'error', 'Only DoorMatrix admin can update verification status.');
+        }
+        $user_id = absint($_POST['team_user_id'] ?? 0);
+        if (!$user_id) {
+            $this->redirect_with_message('staff', 'error', 'Could not find that account.');
+        }
+        if ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) !== 'yes') {
+            $this->redirect_with_message('staff', 'error', 'Only owner signup accounts can be manually verified.');
+        }
+        update_user_meta($user_id, '_dmx_email_verified', 'yes');
+        update_user_meta($user_id, '_dmx_email_verified_at', current_time('mysql'));
+        update_user_meta($user_id, '_dmx_email_verify_attempts', 0);
+        update_user_meta($user_id, '_dmx_email_verify_code_hash', '');
+        update_user_meta($user_id, '_dmx_email_verify_code_expires_at', '');
+        $this->redirect_with_message('staff', 'success', 'Owner email marked as verified.');
     }
 
     private function save_company_plan($tab) {
@@ -22376,6 +22433,15 @@ private function render_inspections_tab($is_admin = false) {
                                 <td><?php echo esc_html($pending_user->user_registered); ?></td>
                                 <td>
                                     <div class="dmx-action-row">
+                                        <?php if ((string) get_user_meta($pending_user->ID, '_dmx_is_company_owner', true) === 'yes' && (string) get_user_meta($pending_user->ID, '_dmx_email_verified', true) !== 'yes') : ?>
+                                        <form method="post">
+                                            <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
+                                            <input type="hidden" name="dmx_portal_action" value="admin_mark_owner_email_verified">
+                                            <input type="hidden" name="dmx_tab" value="staff">
+                                            <input type="hidden" name="team_user_id" value="<?php echo esc_attr($pending_user->ID); ?>">
+                                            <button type="submit" class="dmx-btn dmx-btn-secondary">Mark Email Verified</button>
+                                        </form>
+                                        <?php endif; ?>
                                         <form method="post">
                                             <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
                                             <input type="hidden" name="dmx_portal_action" value="deny_team_member">
