@@ -17405,6 +17405,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                         <?php if ($this->current_user_can_view_inventory_and_costs()) : ?><?php echo $this->nav_link('costs', 'Inventory', $tab, $is_admin, 'app'); ?><?php endif; ?>
                         <?php if ($this->current_user_can_view_accounting()) : ?><?php echo $this->nav_link('accounting', 'Accounting', $tab, $is_admin, 'app'); ?><?php endif; ?>
                         <?php if ($this->current_user_can_view_reports()) : ?><?php echo $this->nav_link('reports', 'Reports', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->current_user_can_view_customers_tab()) : ?><?php echo $this->nav_link('customers', 'Customers', $tab, $is_admin, 'app'); ?><?php endif; ?>
                         <?php if ($this->can_view_team_tab()) : ?><?php echo $this->nav_link('staff', 'Team', $tab, $is_admin, 'app'); ?><?php endif; ?>
                         <?php if ($this->current_user_can_view_subcontractors()) : ?><?php echo $this->nav_link('subcontractors', 'Subcontractors', $tab, $is_admin, 'app'); ?><?php endif; ?>
                         <?php if ($this->current_user_can_view_settings()) : ?><?php echo $this->nav_link('settings', 'Settings', $tab, $is_admin, 'app'); ?><?php endif; ?>
@@ -19284,6 +19285,9 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         }
         if ($this->current_user_can_view_reports()) {
             $options['reports'] = 'Reports';
+        }
+        if ($this->current_user_can_view_customers_tab()) {
+            $options['customers'] = 'Customers';
         }
         if ($this->can_view_team_tab()) {
             $options['staff'] = 'Team';
@@ -25202,6 +25206,8 @@ private function render_inspections_tab($is_admin = false) {
         .dmx-subtabs-sales .dmx-subtab-invoices.active{background:#3b82f6;color:#fff}
         .dmx-subtabs-sales .dmx-subtab-payments{background:#2eae68;color:#fff}
         .dmx-subtabs-sales .dmx-subtab-payments.active{background:#2eae68;color:#fff}
+        .dmx-subtabs-sales .dmx-subtab-supplier_requests{background:#f59e0b;color:#fff}
+        .dmx-subtabs-sales .dmx-subtab-supplier_requests.active{background:#f59e0b;color:#fff}
         .dmx-subtabs-mobile-sales{padding:0 0 14px;border-top:none;gap:8px;flex-wrap:wrap;overflow:visible}
         .dmx-subtabs-mobile-sales a{min-height:42px;padding:0 14px;border-radius:999px;font-size:12px;line-height:1.05}
         .dmx-pill-toggle{display:inline-flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 14px;border-radius:999px;background:#edf3f8;border:1px solid #dbe5ef;min-width:110px}
