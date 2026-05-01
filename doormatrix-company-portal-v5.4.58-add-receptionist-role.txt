@@ -8531,8 +8531,48 @@ class DoorMatrix_Company_Portal {
 
         $this->set_company_active_plan($company_key, $plan_key);
         $this->set_company_access_status($company_key, $status, $trial_end_date, $note);
+        if (in_array($status, array('trial', 'active'), true)) {
+            $this->approve_pending_company_owner_for_company($company_key);
+        }
 
         $this->redirect_to_admin_companies($company_key, 'success', 'Company controls updated.');
+    }
+
+    private function approve_pending_company_owner_for_company($company_key) {
+        $company_key = sanitize_title((string) $company_key);
+        if ($company_key === '') {
+            return;
+        }
+
+        $owners = get_users(array(
+            'meta_key' => '_dmx_company_key',
+            'meta_value' => $company_key,
+            'role__in' => $this->get_portal_role_keys(),
+        ));
+
+        if (empty($owners)) {
+            return;
+        }
+
+        foreach ($owners as $owner) {
+            $status = (string) get_user_meta($owner->ID, '_dmx_account_status', true);
+            $is_owner = (string) get_user_meta($owner->ID, '_dmx_is_company_owner', true) === 'yes';
+            if ($status !== 'pending' || !$is_owner) {
+                continue;
+            }
+
+            $wp_user = new WP_User($owner->ID);
+            $wp_user->set_role(self::MANAGER_ROLE);
+
+            update_user_meta($owner->ID, '_dmx_company_key', $company_key);
+            update_user_meta($owner->ID, '_dmx_requested_role', self::MANAGER_ROLE);
+            update_user_meta($owner->ID, '_dmx_account_status', 'approved');
+            update_user_meta($owner->ID, '_dmx_role_approved_at', current_time('mysql'));
+            update_user_meta($owner->ID, '_dmx_role_approved_by', get_current_user_id());
+            update_user_meta($owner->ID, '_dmx_needs_company_setup', 'yes');
+
+            $this->notify_user_account_approved($owner->ID);
+        }
     }
 
     private function extend_company_trial($tab) {
