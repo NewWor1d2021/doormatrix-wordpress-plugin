@@ -29143,6 +29143,9 @@ private function get_work_order_items_summary_html($work_order_id) {
         ob_start();
 
         $inventory_view = sanitize_key($_GET['dmx_inventory_view'] ?? '');
+        if ($inventory_view === '' && $this->current_user_is_coordinator() && !current_user_can('manage_options') && !$this->current_user_is_portal_manager()) {
+            $inventory_view = 'truck_scheduling';
+        }
         if ($this->current_user_is_technician() && !current_user_can('manage_options') && !$this->current_user_is_portal_manager()) {
             echo $this->render_technician_assigned_truck_inventory_view($locations, $balances, $parts, $is_admin);
             return ob_get_clean();
@@ -29267,7 +29270,11 @@ private function get_work_order_items_summary_html($work_order_id) {
             echo '<button type="submit" class="dmx-btn">Record Usage</button></form></div>';
             echo '</div>';
         } else {
-            echo '<div class="dmx-message dmx-message-error">You have read-only inventory access. A manager, warehouse user, or parts user is required to receive, transfer, adjust, or use stock.</div>';
+            if ($this->current_user_is_coordinator()) {
+                echo '<div class="dmx-inline-note">Inventory management controls are limited to managers, warehouse, and parts users. Coordinators can use the scheduling inventory view to check warehouse/truck stock and customer door orders.</div>';
+            } else {
+                echo '<div class="dmx-message dmx-message-error">You have read-only inventory access. A manager, warehouse user, or parts user is required to receive, transfer, adjust, or use stock.</div>';
+            }
         }
 
         if ($this->can_process_truck_inventory_requests()) {
@@ -29432,8 +29439,8 @@ private function get_work_order_items_summary_html($work_order_id) {
         });
 
         ob_start();
-        echo '<div class="dmx-form-card"><h4 class="dmx-panel-title">Invoice Inventory Exceptions</h4>';
-        echo '<div class="dmx-inline-note" style="margin-bottom:10px;">Review invoice inventory shortages for assigned trucks. Mark each exception resolved or ignored, and add a note for audit history.</div>';
+        echo '<div class="dmx-form-card"><h4 class="dmx-panel-title">Invoice Inventory Review</h4>';
+        echo '<div class="dmx-inline-note" style="margin-bottom:10px;">Review invoice part mismatches on assigned trucks. Mark each item resolved or ignored, and add a note for history.</div>';
         $base_url = $this->get_dashboard_url($is_admin, array('dmx_tab' => 'costs', 'dmx_subtab' => 'inventory'));
         echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px;">';
         echo '<a class="dmx-btn dmx-btn-secondary" href="' . esc_url($base_url) . '">All</a>';
@@ -29443,7 +29450,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         echo '</div>';
 
         if (empty($rows)) {
-            echo '<div class="dmx-empty">No invoice inventory exceptions need review.</div></div>';
+            echo '<div class="dmx-empty">No invoice inventory items need review.</div></div>';
             return ob_get_clean();
         }
 
