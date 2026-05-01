@@ -36057,6 +36057,12 @@ private function get_work_order_items_summary_html($work_order_id) {
         if ($po_id <= 0) {
             $this->redirect_with_message('subcontractors', 'error', 'Could not find that PO.');
         }
+        if (!current_user_can('manage_options')) {
+            $company_key = $this->get_current_user_company_key();
+            if ($company_key === '' || (string) get_post_meta($po_id, '_dmx_company_key', true) !== $company_key) {
+                $this->redirect_with_message('subcontractors', 'error', 'You are not allowed to update that PO.');
+            }
+        }
         update_post_meta($po_id, '_dmx_status', $status);
         $this->redirect_with_message('subcontractors', 'success', 'Subcontractor PO status updated.');
     }
@@ -36069,6 +36075,12 @@ private function get_work_order_items_summary_html($work_order_id) {
         $status = sanitize_key($_POST['scinv_status'] ?? 'submitted');
         if ($invoice_id <= 0) {
             $this->redirect_with_message('subcontractors', 'error', 'Could not find that subcontractor invoice.');
+        }
+        if (!current_user_can('manage_options')) {
+            $company_key = $this->get_current_user_company_key();
+            if ($company_key === '' || (string) get_post_meta($invoice_id, '_dmx_company_key', true) !== $company_key) {
+                $this->redirect_with_message('subcontractors', 'error', 'You are not allowed to update that subcontractor invoice.');
+            }
         }
         update_post_meta($invoice_id, '_dmx_status', $status);
         $this->redirect_with_message('subcontractors', 'success', 'Subcontractor invoice status updated.');
