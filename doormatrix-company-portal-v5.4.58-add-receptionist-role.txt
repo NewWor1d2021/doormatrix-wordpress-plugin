@@ -22567,6 +22567,30 @@ private function render_inspections_tab($is_admin = false) {
             }
         }
 
+        $invoice_technician_id = absint(get_post_meta($invoice_id, '_dmx_invoice_technician_id', true));
+        if ($invoice_technician_id > 0) {
+            $truck_key = $this->get_truck_key_for_technician_user($invoice_technician_id, $location_map);
+            if ($truck_key !== '') {
+                return $truck_key;
+            }
+        }
+
+        $invoice_technician_name = trim((string) get_post_meta($invoice_id, '_dmx_invoice_technician_name', true));
+        if ($invoice_technician_name !== '') {
+            $matched_users = get_users(array(
+                'search' => $invoice_technician_name,
+                'search_columns' => array('display_name', 'user_nicename', 'user_login'),
+                'number' => 10,
+                'fields' => 'ID',
+            ));
+            foreach ((array) $matched_users as $matched_user_id) {
+                $truck_key = $this->get_truck_key_for_technician_user($matched_user_id, $location_map);
+                if ($truck_key !== '') {
+                    return $truck_key;
+                }
+            }
+        }
+
         $invoice_post = get_post($invoice_id);
         if ($invoice_post instanceof WP_Post) {
             $author_id = absint($invoice_post->post_author);
