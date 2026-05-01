@@ -113,12 +113,12 @@ class DoorMatrix_Company_Portal {
         }
 
         if (!empty($_GET['dmx_tab']) || !empty($_GET['dmx_auth'])) {
-            return true;
+            return array('has_exceptions' => false, 'exceptions_count' => 0);
         }
 
         global $post;
         if ($post instanceof WP_Post && has_shortcode((string) $post->post_content, 'doormatrix_portal')) {
-            return true;
+            return array('has_exceptions' => false, 'exceptions_count' => 0);
         }
 
         return false;
@@ -9210,6 +9210,9 @@ class DoorMatrix_Company_Portal {
             }
             $this->handle_document_photo_uploads($post_id, 'invoice_photos');
             $this->update_quote_builder_source_prices($line_items);
+            if (!empty($inventory_result['has_exceptions'])) {
+                $this->redirect_with_message($tab, 'success', 'Invoice saved, but one or more parts need inventory review because assigned truck stock was missing or too low.');
+            }
             $this->redirect_with_message($tab, 'success', 'Invoice created successfully.');
         }
         $this->redirect_with_message($tab, 'error', 'Could not create invoice.');
@@ -9290,6 +9293,9 @@ class DoorMatrix_Company_Portal {
             }
             $this->handle_document_photo_uploads($invoice_id, 'invoice_photos');
             $this->update_quote_builder_source_prices($line_items);
+            if (!empty($inventory_result['has_exceptions'])) {
+                $this->redirect_with_message($tab, 'success', 'Invoice saved, but one or more parts need inventory review because assigned truck stock was missing or too low.');
+            }
             $this->redirect_with_message($tab, 'success', 'Invoice updated successfully.');
         }
 
@@ -22641,7 +22647,7 @@ private function render_inspections_tab($is_admin = false) {
         $desired = $this->get_invoice_inventory_usage_summary($line_items);
 
         $part_ids = array_unique(array_merge(array_keys($existing), array_keys($desired)));
-        $errors = array();
+        $shortages = array();
 
         foreach ($part_ids as $part_id) {
             $part_id = absint($part_id);
@@ -22656,12 +22662,12 @@ private function render_inspections_tab($is_admin = false) {
             }
             $current = isset($balances[$part_id][$location_key]) ? (float) $balances[$part_id][$location_key] : 0;
             if ($current < $delta) {
-                $errors[] = get_the_title($part_id) . ' (need ' . number_format($delta, 2, '.', '') . ', truck has ' . number_format($current, 2, '.', '') . ')';
+                $shortages[$part_id] = array(
+                    'requested_quantity' => $delta,
+                    'recorded_quantity' => $current,
+                    'missing_quantity' => max(0, $delta - $current),
+                );
             }
-        }
-
-        if (!empty($errors)) {
-            return new WP_Error('dmx_inventory_shortage', 'Not enough stock on the assigned truck for this invoice: ' . implode('; ', $errors) . '.');
         }
 
         $invoice_number = (string) get_post_meta($invoice_id, '_dmx_invoice_number', true);
@@ -22686,6 +22692,9 @@ private function render_inspections_tab($is_admin = false) {
                 $balances[$part_id] = array();
             }
             $current = isset($balances[$part_id][$location_key]) ? (float) $balances[$part_id][$location_key] : 0;
+            if ($delta > 0 && isset($shortages[$part_id])) {
+                continue;
+            }
             $balances[$part_id][$location_key] = max(0, $current - $delta);
 
             if ($delta > 0) {
@@ -22701,7 +22710,65 @@ private function render_inspections_tab($is_admin = false) {
         update_post_meta($invoice_id, '_dmx_inventory_usage_summary', $desired);
         update_post_meta($invoice_id, '_dmx_inventory_usage_location_key', $location_key);
 
-        return true;
+        if (!empty($shortages)) {
+            $technician_user_id = $this->resolve_invoice_inventory_usage_technician_user_id($invoice_id);
+            foreach ($shortages as $part_id => $shortage) {
+                $this->log_invoice_inventory_exception(array(
+                    'company_key' => $this->get_current_user_company_key(),
+                    'invoice_id' => $invoice_id,
+                    'technician_user_id' => $technician_user_id,
+                    'assigned_truck_key' => $location_key,
+                    'part_id' => $part_id,
+                    'part_name' => get_the_title($part_id),
+                    'requested_quantity' => (float) $shortage['requested_quantity'],
+                    'recorded_quantity' => (float) $shortage['recorded_quantity'],
+                    'missing_quantity' => (float) $shortage['missing_quantity'],
+                ));
+            }
+        }
+
+        return array('has_exceptions' => !empty($shortages), 'exceptions_count' => count($shortages));
+    }
+
+    private function resolve_invoice_inventory_usage_technician_user_id($invoice_id) {
+        $invoice_id = absint($invoice_id);
+        if ($invoice_id <= 0) {
+            return 0;
+        }
+
+        $invoice_post = get_post($invoice_id);
+        if ($invoice_post instanceof WP_Post) {
+            return absint($invoice_post->post_author);
+        }
+
+        return 0;
+    }
+
+    private function log_invoice_inventory_exception($entry) {
+        if (!is_array($entry)) {
+            return;
+        }
+
+        $exceptions = get_option('dmx_inventory_invoice_exceptions', array());
+        if (!is_array($exceptions)) {
+            $exceptions = array();
+        }
+
+        $exceptions[] = array(
+            'company_key' => sanitize_text_field((string) ($entry['company_key'] ?? '')),
+            'invoice_id' => absint($entry['invoice_id'] ?? 0),
+            'technician_user_id' => absint($entry['technician_user_id'] ?? 0),
+            'assigned_truck_key' => sanitize_key((string) ($entry['assigned_truck_key'] ?? '')),
+            'part_id' => absint($entry['part_id'] ?? 0),
+            'part_name' => sanitize_text_field((string) ($entry['part_name'] ?? '')),
+            'requested_quantity' => (float) ($entry['requested_quantity'] ?? 0),
+            'recorded_quantity' => (float) ($entry['recorded_quantity'] ?? 0),
+            'missing_quantity' => (float) ($entry['missing_quantity'] ?? 0),
+            'timestamp' => current_time('mysql'),
+            'status' => 'needs_review',
+        );
+
+        update_option('dmx_inventory_invoice_exceptions', $exceptions, false);
     }
 
     private function get_roles_allowed_po_permission() {
