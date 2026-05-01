@@ -26886,18 +26886,20 @@ private function get_schedule_team_users($roles = array()) {
         return $demo_users;
     }
 
-    $args = array(
-        'orderby' => 'display_name',
-        'order' => 'ASC',
-    );
+    $company_key = $this->get_current_user_company_key();
+    $team_roles = !empty($roles)
+        ? $roles
+        : array(self::MANAGER_ROLE, self::ACCOUNTING_ROLE, self::STAFF_ROLE, self::SALES_ROLE, self::COORDINATOR_ROLE, self::TECHNICIAN_ROLE, self::WAREHOUSE_ROLE, self::PARTS_ROLE, self::RECEPTIONIST_ROLE, self::SUBCONTRACTOR_ROLE);
 
-    if (!empty($roles)) {
-        $args['role__in'] = $roles;
-    } else {
-        $args['role__in'] = array(self::MANAGER_ROLE, self::ACCOUNTING_ROLE, self::STAFF_ROLE, self::SALES_ROLE, self::COORDINATOR_ROLE, self::TECHNICIAN_ROLE, self::WAREHOUSE_ROLE, self::PARTS_ROLE, self::RECEPTIONIST_ROLE, self::SUBCONTRACTOR_ROLE);
+    if ($company_key !== '') {
+        return $this->get_company_users($company_key, $team_roles);
     }
 
-    return get_users($args);
+    return get_users(array(
+        'role__in' => $team_roles,
+        'orderby' => 'display_name',
+        'order' => 'ASC',
+    ));
 }
 
 private function get_quote_select_options() {
@@ -27578,6 +27580,11 @@ private function get_sales_scheduler_base_url($is_admin = false) {
 }
 
 private function get_sales_scheduler_users() {
+    $company_key = $this->get_current_user_company_key();
+    if ($company_key !== '') {
+        return $this->get_company_users($company_key, array(self::SALES_ROLE));
+    }
+
     return get_users(array(
         'role__in' => array(self::SALES_ROLE),
         'orderby' => 'display_name',
