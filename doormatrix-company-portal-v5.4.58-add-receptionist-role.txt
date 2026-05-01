@@ -6385,20 +6385,32 @@ class DoorMatrix_Company_Portal {
 
 
     private function current_user_can_view_customers_tab() {
-        return current_user_can('manage_options') || $this->current_user_is_portal_manager() || $this->current_user_is_accounting() || $this->current_user_is_coordinator() || $this->current_user_is_receptionist() || $this->current_user_is_sales() || $this->current_user_is_technician() || $this->current_user_is_warehouse() || $this->current_user_is_parts();
+        return current_user_can('manage_options')
+            || $this->current_user_is_portal_manager()
+            || $this->current_user_has_role_or_requested_role(self::MANAGER_ROLE)
+            || $this->current_user_is_accounting()
+            || $this->current_user_is_coordinator()
+            || $this->current_user_is_receptionist()
+            || $this->current_user_is_sales()
+            || $this->current_user_is_technician()
+            || $this->current_user_is_warehouse()
+            || $this->current_user_is_parts();
     }
 
     private function current_user_can_add_customers() {
         return current_user_can('manage_options')
             || $this->current_user_is_portal_manager()
+            || $this->current_user_has_role_or_requested_role(self::MANAGER_ROLE)
             || $this->current_user_is_coordinator()
             || $this->current_user_is_sales()
+            || $this->current_user_is_receptionist()
             || $this->current_user_is_technician();
     }
 
     private function current_user_can_manage_customers() {
         return current_user_can('manage_options')
             || $this->current_user_is_portal_manager()
+            || $this->current_user_has_role_or_requested_role(self::MANAGER_ROLE)
             || $this->current_user_is_coordinator()
             || $this->current_user_is_sales();
     }
@@ -32620,6 +32632,7 @@ private function get_work_order_items_summary_html($work_order_id) {
                                 $customer_option_id = absint($customer_option['id'] ?? 0);
                                 $customer_option_name = trim((string) (($customer_option['company'] ?? '') !== '' ? $customer_option['company'] : ($customer_option['name'] ?? $customer_option['title'] ?? '')));
                                 $customer_option_meta = trim(implode(' • ', array_filter(array(
+                                    (string) ($customer_option['customer_number'] ?? ''),
                                     (string) ($customer_option['name'] ?? ''),
                                     (string) ($customer_option['phone'] ?? ''),
                                     (string) ($customer_option['address_summary'] ?? ''),
@@ -32640,6 +32653,7 @@ private function get_work_order_items_summary_html($work_order_id) {
                             <div class="dmx-work-order-part-results"></div>
                         </div>
                         <div class="dmx-inline-note">Typing here opens the same customer drop-down and auto-fills the work order when selected.</div>
+                        <?php if ($this->current_user_can_add_customers()) : ?><div class="dmx-inline-note"><a href="<?php echo esc_url($this->get_dashboard_url($is_admin, array('dmx_tab' => 'customers')) . '#dmx-add-customer'); ?>">Add Customer</a> in a new tab if this contact is not in your company list yet.</div><?php endif; ?>
                     </div>
                 </div>
 
