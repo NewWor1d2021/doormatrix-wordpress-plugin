@@ -9311,6 +9311,9 @@ class DoorMatrix_Company_Portal {
         if ($quote_id <= 0 || get_post_type($quote_id) !== 'dm_quote') {
             $this->redirect_with_message('quotes', 'error', 'Could not find that quote to convert.');
         }
+        if (!$this->post_matches_current_company($quote_id)) {
+            $this->redirect_with_message('quotes', 'error', 'You are not allowed to convert that quote.');
+        }
 
         $quote = get_post($quote_id);
         if (!$quote) {
