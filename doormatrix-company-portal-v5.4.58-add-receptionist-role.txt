@@ -16589,6 +16589,10 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
     }
 
     private function save_company_profile_settings($tab = 'overview') {
+        if (!$this->current_user_can_view_settings()) {
+            $this->redirect_with_message('settings', 'error', 'You do not have permission to save company settings.');
+        }
+
         $current = $this->get_company_profile_settings();
         $mode = sanitize_text_field($_POST['dmx_company_default_tax_mode'] ?? $current['default_tax_mode']);
         $country = sanitize_text_field($_POST['dmx_company_default_tax_country'] ?? $current['default_tax_country']);
@@ -31012,6 +31016,10 @@ private function get_work_order_items_summary_html($work_order_id) {
     }
 
     private function save_currency_payment_settings($tab = 'settings') {
+        if (!$this->current_user_can_view_settings()) {
+            $this->redirect_with_message('settings', 'error', 'You do not have permission to save company settings.');
+        }
+
         $settings = $this->get_currency_payment_settings();
         $methods = array();
         foreach (array('cash', 'cheque', 'bank_transfer', 'paypal', 'etransfer', 'credit_card', 'debit_card') as $method) {
@@ -31080,6 +31088,10 @@ private function get_work_order_items_summary_html($work_order_id) {
     }
 
     private function save_tax_rates_settings($tab = 'settings') {
+        if (!$this->current_user_can_view_settings()) {
+            $this->redirect_with_message('settings', 'error', 'You do not have permission to save company settings.');
+        }
+
         $rows = array();
         if (!empty($_POST['dmx_tax_rows']) && is_array($_POST['dmx_tax_rows'])) {
             foreach ($_POST['dmx_tax_rows'] as $row) {
@@ -31218,6 +31230,10 @@ private function get_work_order_items_summary_html($work_order_id) {
     }
 
     private function save_document_layout_settings($tab = 'settings') {
+        if (!$this->current_user_can_view_settings()) {
+            $this->redirect_with_message('settings', 'error', 'You do not have permission to save company settings.');
+        }
+
         $settings = $this->get_document_layout_settings();
         $submitted_doc = sanitize_key($_POST['dmx_doc_type'] ?? '');
         $docs_to_save = in_array($submitted_doc, array('quote', 'invoice'), true) ? array($submitted_doc) : array('quote', 'invoice');
@@ -31398,6 +31414,10 @@ private function get_work_order_items_summary_html($work_order_id) {
     }
 
     private function save_attachment_settings($tab = 'settings') {
+        if (!$this->current_user_can_view_settings()) {
+            $this->redirect_with_message('settings', 'error', 'You do not have permission to save company settings.');
+        }
+
         $rows = array();
         if (!empty($_POST['dmx_attachment']) && is_array($_POST['dmx_attachment']['name'])) {
             $count = count($_POST['dmx_attachment']['name']);
