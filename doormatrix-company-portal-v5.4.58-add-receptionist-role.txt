@@ -6403,7 +6403,6 @@ class DoorMatrix_Company_Portal {
             || $this->current_user_has_role_or_requested_role(self::MANAGER_ROLE)
             || $this->current_user_is_coordinator()
             || $this->current_user_is_sales()
-            || $this->current_user_is_receptionist()
             || $this->current_user_is_technician();
     }
 
@@ -27135,16 +27134,6 @@ private function get_accessible_work_orders($limit = 50) {
         return get_posts($args);
     }
 
-        $user_id = get_current_user_id();
-        $primary_id = absint(get_post_meta($work_order_id, '_dmx_work_order_primary_technician', true));
-        $additional = get_post_meta($work_order_id, '_dmx_work_order_additional_technicians', true);
-        if (!is_array($additional)) {
-            $additional = array();
-        }
-        if ($primary_id === $user_id || in_array($user_id, array_map('absint', $additional), true)) {
-            return true;
-        }
-
     if ($this->current_user_is_technician()) {
         $user_id = get_current_user_id();
         $args['meta_query'] = array(
@@ -27626,16 +27615,6 @@ function render_scheduler_tab($is_admin = false) {
     $default_team_view = 'all';
     if ($this->current_user_is_sales()) {
         $default_team_view = 'sales';
-        $user_id = get_current_user_id();
-        $primary_id = absint(get_post_meta($work_order_id, '_dmx_work_order_primary_technician', true));
-        $additional = get_post_meta($work_order_id, '_dmx_work_order_additional_technicians', true);
-        if (!is_array($additional)) {
-            $additional = array();
-        }
-        if ($primary_id === $user_id || in_array($user_id, array_map('absint', $additional), true)) {
-            return true;
-        }
-
     } elseif ($this->current_user_is_technician()) {
         $default_team_view = 'technician';
     } elseif ($this->current_user_is_warehouse()) {
