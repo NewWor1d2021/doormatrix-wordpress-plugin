@@ -32,6 +32,8 @@ class DoorMatrix_Company_Portal {
     const SAVED_ITEM_POST_TYPE = 'dm_saved_item';
     const SAVED_ITEM_TAXONOMY = 'dm_saved_item_category';
     const HAZARD_ASSESSMENT_POST_TYPE = 'dm_hazard_assessment';
+    const INVENTORY_ACTIVITY_RETENTION_LIMIT = 1000;
+    const BACKUP_EXPORT_SCHEMA_VERSION = '1.1';
 
     private $dmx_admin_live_preview_mode = false;
     private $dmx_admin_live_preview_company_name = 'DoorMatrix Demo Company';
@@ -6477,6 +6479,25 @@ class DoorMatrix_Company_Portal {
         }
 
         return $post_company_key === $current_company_key;
+    }
+
+    private function post_belongs_to_company_strict($post_id, $company_key = '') {
+        $post_id = absint($post_id);
+        if ($post_id <= 0) {
+            return false;
+        }
+
+        $company_key = $company_key !== '' ? sanitize_title((string) $company_key) : sanitize_title((string) $this->get_current_user_company_key());
+        if ($company_key === '') {
+            return current_user_can('manage_options');
+        }
+
+        $post_company_key = sanitize_title((string) get_post_meta($post_id, '_dmx_company_key', true));
+        if ($post_company_key === '') {
+            return current_user_can('manage_options');
+        }
+
+        return $post_company_key === $company_key;
     }
 
     private function current_user_can_access_work_order($work_order_id) {
@@ -29069,7 +29090,7 @@ private function get_work_order_items_summary_html($work_order_id) {
     private function save_inventory_activity($rows) {
         $all = get_option('dmx_inventory_activity', array());
         $company_key = $this->get_inventory_company_key();
-        $all[$company_key] = array_slice(array_values($rows), 0, 150);
+        $all[$company_key] = array_slice(array_values($rows), 0, self::INVENTORY_ACTIVITY_RETENTION_LIMIT);
         update_option('dmx_inventory_activity', $all);
     }
 
@@ -31159,6 +31180,36 @@ private function get_work_order_items_summary_html($work_order_id) {
         );
     }
 
+    private function get_truck_inventory_requests_for_export($company_key = '') {
+        $company_key = sanitize_title((string) $company_key);
+        $requests = get_option('dmx_truck_inventory_requests', array());
+        if (!is_array($requests)) {
+            return array();
+        }
+
+        return array_values(array_filter($requests, function($request) use ($company_key) {
+            if (!is_array($request)) {
+                return false;
+            }
+            return sanitize_title((string) ($request['company_key'] ?? '')) === $company_key;
+        }));
+    }
+
+    private function get_invoice_inventory_exceptions_for_export($company_key = '') {
+        $company_key = sanitize_title((string) $company_key);
+        $exceptions = get_option('dmx_inventory_invoice_exceptions', array());
+        if (!is_array($exceptions)) {
+            return array();
+        }
+
+        return array_values(array_filter($exceptions, function($entry) use ($company_key) {
+            if (!is_array($entry)) {
+                return false;
+            }
+            return sanitize_title((string) ($entry['company_key'] ?? '')) === $company_key;
+        }));
+    }
+
     private function build_company_backup_export_data($export_type = 'full') {
         global $wpdb;
 
@@ -31172,7 +31223,9 @@ private function get_work_order_items_summary_html($work_order_id) {
         $export = array(
             'export_meta' => array(
                 'system' => 'DoorMatrix Company Portal',
+                'source_plugin' => 'DoorMatrix Company Portal',
                 'plugin_version' => self::VERSION,
+                'export_version' => self::BACKUP_EXPORT_SCHEMA_VERSION,
                 'export_type' => $export_type,
                 'company_key' => $company_key,
                 'company_name' => $company_name,
@@ -31180,6 +31233,10 @@ private function get_work_order_items_summary_html($work_order_id) {
                 'generated_by_user_id' => get_current_user_id(),
                 'generated_by_name' => wp_get_current_user()->display_name,
                 'note' => 'Phase 1 export. This file stores structured company data and file references. Full ZIP/offsite backup automation is planned for later phases.',
+            ),
+            'company_scope' => array(
+                'company_key' => $company_key,
+                'company_name' => $company_name,
             ),
             'settings' => array(
                 'company_profile' => $this->get_company_profile_settings(),
@@ -31196,6 +31253,10 @@ private function get_work_order_items_summary_html($work_order_id) {
                 'balances' => $this->get_inventory_balances(),
                 'activity' => $this->get_inventory_activity(),
             ),
+            'inventory_requests' => array(
+                'truck_inventory_requests' => $this->get_truck_inventory_requests_for_export($company_key),
+                'invoice_inventory_exceptions' => $this->get_invoice_inventory_exceptions_for_export($company_key),
+            ),
             'messages' => array(
                 'threads' => array(),
                 'participants' => array(),
@@ -31204,6 +31265,14 @@ private function get_work_order_items_summary_html($work_order_id) {
             'parts_library' => array(),
             'saved_items_library' => array(),
             'file_index' => array(),
+            'export_sections' => array(
+                'company_profile_settings' => 'settings.company_profile/startup_setup/document_layout/attachment_settings/tax_rates/active_plan',
+                'team_user_company_assignments' => 'team_users',
+                'customers_quotes_invoices_work_orders_schedules_supplier_subcontractor' => 'records',
+                'inventory_locations_balances_activity' => 'inventory',
+                'truck_inventory_requests_and_invoice_inventory_exceptions' => 'inventory_requests',
+                'file_index_attachment_references' => 'file_index',
+            ),
             'counts' => array(
                 'records' => 0,
                 'team_users' => 0,
@@ -31212,6 +31281,8 @@ private function get_work_order_items_summary_html($work_order_id) {
                 'files' => 0,
                 'parts' => 0,
                 'saved_items' => 0,
+                'truck_inventory_requests' => 0,
+                'invoice_inventory_exceptions' => 0,
             ),
         );
 
@@ -31245,11 +31316,14 @@ private function get_work_order_items_summary_html($work_order_id) {
             $posts = get_posts($args);
             $export['records'][$post_type] = array();
             foreach ($posts as $post) {
+                if (!$this->post_belongs_to_company_strict($post->ID, $company_key)) {
+                    continue;
+                }
                 $row = $this->serialize_backup_post_record($post);
                 $export['records'][$post_type][] = $row;
                 $export['file_index'] = array_merge($export['file_index'], $this->extract_backup_file_references_from_meta($post->ID, $row['meta']));
             }
-            $export['counts']['records'] += count($posts);
+            $export['counts']['records'] += count($export['records'][$post_type]);
         }
 
         foreach (array(self::PART_POST_TYPE => 'parts_library', self::SAVED_ITEM_POST_TYPE => 'saved_items_library') as $post_type => $bucket) {
@@ -31287,6 +31361,8 @@ private function get_work_order_items_summary_html($work_order_id) {
         $export['counts']['team_users'] = count($export['team_users']);
         $export['counts']['message_threads'] = count($export['messages']['threads']);
         $export['counts']['message_rows'] = count($export['messages']['messages']);
+        $export['counts']['truck_inventory_requests'] = count($export['inventory_requests']['truck_inventory_requests']);
+        $export['counts']['invoice_inventory_exceptions'] = count($export['inventory_requests']['invoice_inventory_exceptions']);
         $export['file_index'] = $this->dedupe_backup_file_index($export['file_index']);
         $export['counts']['files'] = count($export['file_index']);
 
@@ -31530,7 +31606,7 @@ private function get_work_order_items_summary_html($work_order_id) {
             $this->redirect_with_message('settings', 'error', 'This record is not currently in the Recovery Bin.');
         }
 
-        if (!$this->post_matches_current_company($record_id)) {
+        if (!$this->post_belongs_to_company_strict($record_id)) {
             $this->redirect_with_message('settings', 'error', 'This record does not belong to your company.');
         }
 
@@ -31554,7 +31630,7 @@ private function get_work_order_items_summary_html($work_order_id) {
                     continue;
                 }
 
-                if (!$this->post_matches_current_company($related_id)) {
+                if (!$this->post_belongs_to_company_strict($related_id)) {
                     continue;
                 }
 
