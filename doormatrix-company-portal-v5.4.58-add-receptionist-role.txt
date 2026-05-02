@@ -33,6 +33,8 @@ class DoorMatrix_Company_Portal {
     const SAVED_ITEM_TAXONOMY = 'dm_saved_item_category';
     const HAZARD_ASSESSMENT_POST_TYPE = 'dm_hazard_assessment';
     const INVENTORY_ACTIVITY_RETENTION_LIMIT = 1000;
+    const AUDIT_LOG_RETENTION_LIMIT = 5000;
+    const AUDIT_LOG_OPTION_KEY = 'dmx_audit_log_v1';
     const BACKUP_EXPORT_SCHEMA_VERSION = '1.1';
 
     private $dmx_admin_live_preview_mode = false;
@@ -54,6 +56,7 @@ class DoorMatrix_Company_Portal {
         add_action('template_redirect', array($this, 'handle_public_document_views'), 1);
         add_action('admin_init', array($this, 'maybe_redirect_portal_users_from_backend'));
         add_filter('authenticate', array($this, 'block_unapproved_portal_login'), 30, 3);
+        add_action('wp_login_failed', array($this, 'handle_wp_login_failed_audit'));
         add_filter('show_admin_bar', array($this, 'maybe_hide_front_admin_bar'), 20);
         add_filter('pre_get_document_title', array($this, 'filter_portal_document_title'), 20);
         add_filter('document_title_parts', array($this, 'filter_portal_document_title_parts'), 20);
@@ -7967,6 +7970,87 @@ class DoorMatrix_Company_Portal {
         return $user;
     }
 
+    private function get_audit_actor_context() {
+        $user = wp_get_current_user();
+        $actor_id = get_current_user_id();
+        $display = '';
+        if ($user instanceof WP_User) {
+            $display = trim((string) $user->display_name);
+            if ($display === '') {
+                $display = trim((string) $user->user_email);
+            }
+        }
+
+        return array(
+            'actor_user_id' => $actor_id > 0 ? $actor_id : 0,
+            'actor_display_name' => $display,
+        );
+    }
+
+    private function add_audit_log_entry($entry) {
+        $actor = $this->get_audit_actor_context();
+        $company_key = sanitize_key((string) ($entry['company_key'] ?? $this->get_current_company_key()));
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        $source_ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
+        $records = get_option(self::AUDIT_LOG_OPTION_KEY, array());
+        if (!is_array($records)) {
+            $records = array();
+        }
+
+        $records[] = array(
+            'company_key' => $company_key,
+            'actor_user_id' => absint($entry['actor_user_id'] ?? $actor['actor_user_id']),
+            'actor_display_name' => sanitize_text_field((string) ($entry['actor_display_name'] ?? $actor['actor_display_name'])),
+            'action' => sanitize_key((string) ($entry['action'] ?? 'unknown')),
+            'object_type' => sanitize_key((string) ($entry['object_type'] ?? 'unknown')),
+            'object_id' => sanitize_text_field((string) ($entry['object_id'] ?? '')),
+            'object_label' => sanitize_text_field((string) ($entry['object_label'] ?? '')),
+            'request_context' => sanitize_text_field((string) ($entry['request_context'] ?? $request_uri)),
+            'source_ip_hash' => $source_ip !== '' ? wp_hash($source_ip) : '',
+            'before_summary' => sanitize_text_field((string) ($entry['before_summary'] ?? '')),
+            'after_summary' => sanitize_text_field((string) ($entry['after_summary'] ?? '')),
+            'timestamp' => current_time('mysql'),
+        );
+
+        if (count($records) > self::AUDIT_LOG_RETENTION_LIMIT) {
+            $records = array_slice($records, -1 * self::AUDIT_LOG_RETENTION_LIMIT);
+        }
+
+        update_option(self::AUDIT_LOG_OPTION_KEY, $records, false);
+    }
+
+    private function get_visible_audit_log_entries($limit = 100, $filters = array()) {
+        $records = get_option(self::AUDIT_LOG_OPTION_KEY, array());
+        if (!is_array($records)) {
+            $records = array();
+        }
+
+        $is_admin = $this->current_user_is_doormatrix_admin();
+        $company_key = $is_admin ? sanitize_key((string) ($filters['company_key'] ?? '')) : $this->get_current_company_key();
+        $action_filter = sanitize_key((string) ($filters['action'] ?? ''));
+        $object_type_filter = sanitize_key((string) ($filters['object_type'] ?? ''));
+        $out = array();
+        foreach (array_reverse($records) as $row) {
+            $row_company = sanitize_key((string) ($row['company_key'] ?? ''));
+            if ($company_key !== '' && $row_company !== $company_key) { continue; }
+            if (!$is_admin && $row_company !== $company_key) { continue; }
+            if ($action_filter !== '' && sanitize_key((string) ($row['action'] ?? '')) !== $action_filter) { continue; }
+            if ($object_type_filter !== '' && sanitize_key((string) ($row['object_type'] ?? '')) !== $object_type_filter) { continue; }
+            $out[] = $row;
+            if (count($out) >= $limit) { break; }
+        }
+        return $out;
+    }
+
+    public function handle_wp_login_failed_audit($username) {
+        $this->add_audit_log_entry(array(
+            'action' => 'email_verification_failed_attempt',
+            'object_type' => 'user_auth',
+            'object_label' => sanitize_text_field((string) $username),
+            'company_key' => '',
+        ));
+    }
+
     private function redirect_to_signup_target($type, $message, $auth_view = 'company', $verify_user_id = 0) {
         if (!in_array($auth_view, array('login', 'company', 'join', 'verify'), true)) {
             $auth_view = 'company';
@@ -8623,7 +8707,22 @@ class DoorMatrix_Company_Portal {
 
         if ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes') {
             $this->maybe_start_company_trial((string) get_user_meta($user_id, '_dmx_company_key', true));
+            $this->add_audit_log_entry(array(
+                'company_key' => (string) get_user_meta($user_id, '_dmx_company_key', true),
+                'action' => 'company_trial_activated',
+                'object_type' => 'company',
+                'object_id' => (string) get_user_meta($user_id, '_dmx_company_key', true),
+                'object_label' => (string) get_user_meta($user_id, '_dmx_company_name', true),
+            ));
         }
+        $this->add_audit_log_entry(array(
+            'company_key' => $company_key,
+            'action' => 'user_role_approved',
+            'object_type' => 'user',
+            'object_id' => (string) $user_id,
+            'object_label' => (string) $user->user_email,
+            'after_summary' => $requested_role,
+        ));
 
         $this->notify_user_account_approved($user_id);
 
@@ -8665,6 +8764,13 @@ class DoorMatrix_Company_Portal {
         update_user_meta($user_id, '_dmx_email_verify_attempts', 0);
         update_user_meta($user_id, '_dmx_email_verify_code_hash', '');
         update_user_meta($user_id, '_dmx_email_verify_code_expires_at', '');
+        $this->add_audit_log_entry(array(
+            'company_key' => (string) get_user_meta($user_id, '_dmx_company_key', true),
+            'action' => 'email_verification_success',
+            'object_type' => 'user',
+            'object_id' => (string) $user_id,
+            'object_label' => (string) get_user_meta($user_id, '_dmx_company_name', true),
+        ));
         $this->redirect_with_message('staff', 'success', 'Owner email marked as verified.');
     }
 
@@ -8679,7 +8785,16 @@ class DoorMatrix_Company_Portal {
         }
 
         $plan_key = $this->normalize_company_plan_key($_POST['company_plan'] ?? 'starter');
+        $before_plan = $this->get_company_active_plan($company_key);
         $this->set_company_active_plan($company_key, $plan_key);
+        $this->add_audit_log_entry(array(
+            'company_key' => $company_key,
+            'action' => 'company_approval_assignment_change',
+            'object_type' => 'company',
+            'object_id' => $company_key,
+            'before_summary' => $before_plan,
+            'after_summary' => $plan_key,
+        ));
 
         $this->redirect_with_message('staff', 'success', 'Company plan updated to ' . $this->get_company_plan_label($plan_key) . '.');
     }
@@ -8844,6 +8959,7 @@ class DoorMatrix_Company_Portal {
             $this->handle_document_photo_uploads($post_id, 'quote_photos');
             $this->handle_quote_document_uploads($post_id);
             $this->update_quote_builder_source_prices($line_items);
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'quote_create', 'object_type' => 'quote', 'object_id' => (string) $post_id, 'object_label' => $title, 'after_summary' => 'status:' . $status));
             $this->redirect_with_message($tab, 'success', 'Quote created successfully.');
         }
 
@@ -8910,6 +9026,7 @@ class DoorMatrix_Company_Portal {
             $this->handle_document_photo_uploads($quote_id, 'quote_photos');
             $this->handle_quote_document_uploads($quote_id);
             $this->update_quote_builder_source_prices($line_items);
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'quote_update', 'object_type' => 'quote', 'object_id' => (string) $quote_id, 'object_label' => $title, 'after_summary' => 'status:' . $status));
             $this->redirect_with_message($tab, 'success', 'Quote updated successfully.');
         }
 
@@ -9443,6 +9560,7 @@ class DoorMatrix_Company_Portal {
             if (!empty($inventory_result['has_exceptions'])) {
                 $this->redirect_with_message($tab, 'success', 'Invoice saved, but one or more parts need inventory review because assigned truck stock was missing or too low.');
             }
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'invoice_create', 'object_type' => 'invoice', 'object_id' => (string) $post_id, 'object_label' => $title, 'after_summary' => 'status:' . $status));
             $this->redirect_with_message($tab, 'success', 'Invoice created successfully.');
         }
         $this->redirect_with_message($tab, 'error', 'Could not create invoice.');
@@ -9526,6 +9644,7 @@ class DoorMatrix_Company_Portal {
             if (!empty($inventory_result['has_exceptions'])) {
                 $this->redirect_with_message($tab, 'success', 'Invoice saved, but one or more parts need inventory review because assigned truck stock was missing or too low.');
             }
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'invoice_update', 'object_type' => 'invoice', 'object_id' => (string) $invoice_id, 'object_label' => $title, 'after_summary' => 'status:' . $status));
             $this->redirect_with_message($tab, 'success', 'Invoice updated successfully.');
         }
 
@@ -9587,6 +9706,7 @@ class DoorMatrix_Company_Portal {
             $this->stamp_company_key_on_post($invoice_id);
             $this->ensure_document_number('invoice', $invoice_id);
             update_post_meta($quote_id, '_dmx_converted_invoice_id', $invoice_id);
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'quote_convert_to_invoice', 'object_type' => 'quote', 'object_id' => (string) $quote_id, 'after_summary' => 'invoice:' . $invoice_id));
             $this->redirect_with_message('invoices', 'success', 'Quote converted to invoice successfully.');
         }
 
@@ -11060,6 +11180,7 @@ class DoorMatrix_Company_Portal {
             $this->stamp_company_key_on_post($post_id);
             $this->handle_document_photo_uploads($post_id, 'work_order_photos');
             $this->ensure_document_number('work_order', $post_id);
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'work_order_create', 'object_type' => 'work_order', 'object_id' => (string) $post_id, 'object_label' => $title, 'after_summary' => 'status:' . $status . ';schedule_date:' . $schedule_date));
             $this->redirect_with_message($tab, 'success', 'Work order created successfully.');
         }
 
@@ -11177,6 +11298,7 @@ class DoorMatrix_Company_Portal {
 
             $this->stamp_company_key_on_post($work_order_id);
             $this->handle_document_photo_uploads($work_order_id, 'work_order_photos');
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'work_order_update', 'object_type' => 'work_order', 'object_id' => (string) $work_order_id, 'object_label' => $title, 'after_summary' => 'status:' . $status . ';schedule_date:' . $schedule_date));
             $this->redirect_with_message($tab, 'success', 'Work order updated successfully.');
         }
 
@@ -11233,6 +11355,7 @@ private function reschedule_work_order($tab) {
         update_post_meta($work_order_id, '_dmx_work_order_warehouse_pull_date', $pull_date);
     }
 
+    $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'work_order_reschedule', 'object_type' => 'work_order', 'object_id' => (string) $work_order_id, 'object_label' => get_the_title($work_order_id), 'after_summary' => 'date:' . $schedule_date . ';start:' . $schedule_start_time . ';end:' . $schedule_end_time . ';tech:' . $new_primary_technician));
     $this->redirect_with_message($tab, 'success', 'Work order rescheduled.');
 }
 
@@ -11245,6 +11368,7 @@ private function mark_work_order_scheduled_complete($tab) {
 
     update_post_meta($work_order_id, '_dmx_work_order_status', 'complete');
     update_post_meta($work_order_id, '_dmx_status', 'complete');
+    $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'work_order_mark_complete', 'object_type' => 'work_order', 'object_id' => (string) $work_order_id, 'object_label' => get_the_title($work_order_id)));
     $this->redirect_with_message($tab, 'success', 'Work order marked complete.');
 }
 
@@ -11327,6 +11451,7 @@ private function mark_work_order_scheduled_complete($tab) {
         update_post_meta($work_order_id, '_dmx_work_order_completed_at', $completion_date);
         update_post_meta($work_order_id, '_dmx_work_order_completed_by', get_current_user_id());
         update_post_meta($work_order_id, '_dmx_work_order_completion_notes', $completion_notes);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'technician_complete_work_order', 'object_type' => 'work_order', 'object_id' => (string) $work_order_id, 'object_label' => get_the_title($work_order_id), 'after_summary' => 'actual_hours:' . $actual_hours . ';completion_date:' . $completion_date));
 
         $labour_rows = get_post_meta($work_order_id, '_dmx_work_order_labour_rows', true);
         if (!is_array($labour_rows)) {
@@ -11670,6 +11795,7 @@ private function mark_work_order_scheduled_complete($tab) {
         if (!$invoice_id) {
             $this->redirect_with_message($tab, 'error', 'Could not convert this work order into an invoice.');
         }
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'work_order_convert_to_invoice', 'object_type' => 'work_order', 'object_id' => (string) $work_order_id, 'object_label' => get_the_title($work_order_id), 'after_summary' => 'invoice:' . $invoice_id));
 
         update_post_meta($work_order_id, '_dmx_work_order_status', 'invoicing');
         update_post_meta($work_order_id, '_dmx_status', 'invoicing');
@@ -11713,6 +11839,7 @@ private function mark_work_order_scheduled_complete($tab) {
         update_post_meta($work_order_id, '_dmx_work_order_return_suggested_time', $suggested_time);
         update_post_meta($work_order_id, '_dmx_work_order_return_requested_by', get_current_user_id());
         update_post_meta($work_order_id, '_dmx_work_order_return_requested_at', current_time('mysql'));
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'work_order_mark_return_required', 'object_type' => 'work_order', 'object_id' => (string) $work_order_id, 'object_label' => get_the_title($work_order_id), 'after_summary' => 'suggested_date:' . $suggested_date));
 
         $this->redirect_with_message($tab, 'success', 'Return visit flagged. The office can reschedule this work order when ready.');
     }
@@ -11746,6 +11873,7 @@ private function mark_work_order_scheduled_complete($tab) {
         update_post_meta($invoice_id, '_dmx_payment_method', $payment_method);
         update_post_meta($invoice_id, '_dmx_payment_reference', $payment_reference);
         update_post_meta($invoice_id, '_dmx_payment_received_by', get_current_user_id());
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'invoice_mark_paid', 'object_type' => 'invoice', 'object_id' => (string) $invoice_id, 'after_summary' => 'method:' . $payment_method));
 
         $this->redirect_with_message('payments', 'success', 'Invoice marked as paid.');
     }
@@ -11973,6 +12101,7 @@ private function mark_work_order_scheduled_complete($tab) {
             update_post_meta($post_id, '_dmx_customer_postal_code', $postal_code);
             $this->stamp_company_key_on_post($post_id);
             $this->ensure_customer_number($post_id);
+            $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'customer_create', 'object_type' => 'customer', 'object_id' => (string) $post_id, 'object_label' => $title));
             $this->redirect_with_message($tab, 'success', 'Customer created successfully.');
         }
         $this->redirect_with_message($tab, 'error', 'Could not create customer.');
@@ -12010,6 +12139,7 @@ private function mark_work_order_scheduled_complete($tab) {
         update_post_meta($customer_id, '_dmx_customer_province', sanitize_text_field($_POST['customer_province'] ?? ''));
         update_post_meta($customer_id, '_dmx_customer_postal_code', sanitize_text_field($_POST['customer_postal_code'] ?? ''));
         $this->ensure_customer_number($customer_id);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'customer_update', 'object_type' => 'customer', 'object_id' => (string) $customer_id, 'object_label' => $title));
 
         $this->redirect_with_message($tab, 'success', 'Customer updated successfully.');
     }
@@ -12028,6 +12158,7 @@ private function mark_work_order_scheduled_complete($tab) {
         update_post_meta($customer_id, '_dmx_deleted_by_user_name', wp_get_current_user()->display_name);
         update_post_meta($customer_id, '_dmx_deleted_at', current_time('mysql'));
         update_post_meta($customer_id, '_dmx_recovery_type', 'customer');
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'customer_delete', 'object_type' => 'customer', 'object_id' => (string) $customer_id, 'object_label' => get_the_title($customer_id)));
 
         wp_trash_post($customer_id);
         $this->redirect_with_message($tab, 'success', 'Customer moved to Recovery Bin. Managers can restore it from Settings > Backup & Recovery.');
@@ -22969,6 +23100,7 @@ private function render_inspections_tab($is_admin = false) {
             if ($delta > 0) {
                 $notes = 'Auto deducted from invoice ' . $invoice_number . ' by ' . $actor_name;
                 $this->add_inventory_activity('usage', $part_id, $location_key, -1 * $delta, $notes);
+                $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'invoice_inventory_deduction', 'object_type' => 'inventory', 'object_id' => (string) $part_id, 'object_label' => get_the_title($part_id), 'after_summary' => 'invoice:' . $invoice_id . ';truck:' . $location_key . ';qty:' . $delta));
             } else {
                 $notes = 'Inventory returned from invoice update ' . $invoice_number . ' by ' . $actor_name;
                 $this->add_inventory_activity('adjust', $part_id, $location_key, abs($delta), $notes);
@@ -23036,6 +23168,7 @@ private function render_inspections_tab($is_admin = false) {
             'timestamp' => current_time('mysql'),
             'status' => 'needs_review',
         );
+        $this->add_audit_log_entry(array('company_key' => sanitize_text_field((string) ($entry['company_key'] ?? '')), 'action' => 'invoice_inventory_exception_created', 'object_type' => 'invoice_inventory_exception', 'object_id' => (string) absint($entry['invoice_id'] ?? 0), 'object_label' => sanitize_text_field((string) ($entry['part_name'] ?? '')), 'after_summary' => 'truck:' . sanitize_key((string) ($entry['assigned_truck_key'] ?? '')) . ';requested:' . (float) ($entry['requested_quantity'] ?? 0) . ';recorded:' . (float) ($entry['recorded_quantity'] ?? 0) . ';missing:' . (float) ($entry['missing_quantity'] ?? 0)));
 
         update_option('dmx_inventory_invoice_exceptions', $exceptions, false);
     }
@@ -29234,6 +29367,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $balances[$part_id][$location_key] = isset($balances[$part_id][$location_key]) ? (float) $balances[$part_id][$location_key] + $quantity : $quantity;
         $this->save_inventory_balances($balances);
         $this->add_inventory_activity('receive', $part_id, $location_key, $quantity, $notes);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'inventory_receive_stock', 'object_type' => 'inventory', 'object_id' => (string) $part_id, 'object_label' => get_the_title($part_id), 'after_summary' => 'to:' . $location_key . ';qty:' . $quantity));
 
         if ($linked_supplier_request_id > 0 && get_post_type($linked_supplier_request_id) === 'dm_supplier_request' && in_array($door_order_receiving_status, array('partial_received', 'received'), true)) {
             update_post_meta($linked_supplier_request_id, '_dmx_status', $door_order_receiving_status);
@@ -29273,6 +29407,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $balances[$part_id][$to_location_key] = isset($balances[$part_id][$to_location_key]) ? (float) $balances[$part_id][$to_location_key] + $quantity : $quantity;
         $this->save_inventory_balances($balances);
         $this->add_inventory_activity('transfer', $part_id, $from_location_key, $quantity, $notes, $to_location_key);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'inventory_transfer_stock', 'object_type' => 'inventory', 'object_id' => (string) $part_id, 'object_label' => get_the_title($part_id), 'after_summary' => 'from:' . $from_location_key . ';to:' . $to_location_key . ';qty:' . $quantity));
 
         $this->redirect_with_message($tab, 'success', 'Inventory transferred successfully.');
     }
@@ -29308,6 +29443,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $balances[$part_id][$location_key] = max(0, $current + $signed_quantity);
         $this->save_inventory_balances($balances);
         $this->add_inventory_activity('adjust', $part_id, $location_key, $signed_quantity, $notes);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'inventory_adjust_stock', 'object_type' => 'inventory', 'object_id' => (string) $part_id, 'object_label' => get_the_title($part_id), 'before_summary' => 'location:' . $location_key . ';qty:' . $current, 'after_summary' => 'location:' . $location_key . ';qty:' . $balances[$part_id][$location_key]));
 
         $this->redirect_with_message($tab, 'success', 'Inventory adjustment saved.');
     }
@@ -29337,6 +29473,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $balances[$part_id][$location_key] = max(0, $current - $quantity);
         $this->save_inventory_balances($balances);
         $this->add_inventory_activity('usage', $part_id, $location_key, -1 * $quantity, $notes);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'inventory_use_stock', 'object_type' => 'inventory', 'object_id' => (string) $part_id, 'object_label' => get_the_title($part_id), 'after_summary' => 'from:' . $location_key . ';qty:' . $quantity));
 
         $this->redirect_with_message($tab, 'success', 'Inventory usage recorded.');
     }
@@ -29550,13 +29687,16 @@ private function get_work_order_items_summary_html($work_order_id) {
                 foreach ($requests as $request) {
                     $status = sanitize_key((string) ($request['status'] ?? 'requested'));
                     $request_id = (string) ($request['id'] ?? '');
+                    $requested_qty = (float) ($request['requested_quantity'] ?? ($request['quantity'] ?? 0));
+                    $fulfilled_qty = (float) ($request['fulfilled_quantity_total'] ?? 0);
+                    $remaining_qty = (float) ($request['remaining_quantity'] ?? max(0, $requested_qty - $fulfilled_qty));
                     $date_text = !empty($request['created_at']) ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime((string) $request['created_at'])) : '';
                     echo '<tr>';
                     echo '<td>' . esc_html($date_text) . '</td>';
                     echo '<td>' . esc_html((string) ($request['requested_by_name'] ?? 'Technician')) . '</td>';
                     echo '<td>' . esc_html((string) ($request['truck_label'] ?? '')) . '</td>';
                     echo '<td>' . esc_html((string) ($request['part_name'] ?? '')) . '</td>';
-                    echo '<td>' . esc_html(number_format((float) ($request['quantity'] ?? 0), 2)) . '</td>';
+                    echo '<td>' . esc_html(number_format($requested_qty, 2)) . '<br><small>Fulfilled: ' . esc_html(number_format($fulfilled_qty, 2)) . ' | Remaining: ' . esc_html(number_format($remaining_qty, 2)) . '</small></td>';
                     echo '<td>' . esc_html((string) ($request['notes'] ?? '')) . '</td>';
                     echo '<td>' . esc_html(ucwords(str_replace('_', ' ', $status))) . '</td>';
                     echo '<td>';
@@ -29572,12 +29712,13 @@ private function get_work_order_items_summary_html($work_order_id) {
                         echo '</form>';
                     }
 
-                    if ($status === 'approved') {
+                    if (in_array($status, array('approved', 'partially_fulfilled'), true)) {
                         echo '<form method="post" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;">';
                         wp_nonce_field('dmx_portal_submit', 'dmx_nonce');
                         echo '<input type="hidden" name="dmx_portal_action" value="process_truck_inventory_request"><input type="hidden" name="dmx_tab" value="costs"><input type="hidden" name="dmx_subtab" value="inventory">';
                         echo '<input type="hidden" name="truck_inventory_request_id" value="' . esc_attr($request_id) . '">';
                         echo '<input type="hidden" name="truck_inventory_request_decision" value="fulfill">';
+                        echo '<input type="number" step="0.01" min="0.01" max="' . esc_attr((string) $remaining_qty) . '" name="truck_inventory_request_fulfill_quantity" value="' . esc_attr((string) $remaining_qty) . '" style="max-width:130px;" title="Fulfill quantity">';
                         echo '<select name="truck_inventory_request_from_location_key"><option value="">Warehouse location</option>';
                         foreach ($locations as $location) {
                             if (($location['type'] ?? '') !== 'warehouse') {
@@ -29779,6 +29920,7 @@ private function get_work_order_items_summary_html($work_order_id) {
             $exceptions[$index]['ignored_by'] = get_current_user_id();
         }
         $exceptions[$index]['resolution_note'] = $note;
+        $this->add_audit_log_entry(array('company_key' => $company_key, 'action' => $action === 'resolved' ? 'invoice_inventory_exception_resolved' : 'invoice_inventory_exception_ignored', 'object_type' => 'invoice_inventory_exception', 'object_id' => (string) absint($exceptions[$index]['invoice_id'] ?? 0), 'object_label' => sanitize_text_field((string) ($exceptions[$index]['part_name'] ?? '')), 'before_summary' => 'status:' . $action, 'after_summary' => 'truck:' . sanitize_key((string) ($exceptions[$index]['assigned_truck_key'] ?? '')) . ';requested:' . (float) ($exceptions[$index]['requested_quantity'] ?? 0) . ';recorded:' . (float) ($exceptions[$index]['recorded_quantity'] ?? 0) . ';missing:' . (float) ($exceptions[$index]['missing_quantity'] ?? 0) . ';note:' . $note));
 
         $this->save_invoice_inventory_exceptions($exceptions);
         $this->redirect_with_message($tab, 'success', $action === 'resolved' ? 'Invoice inventory exception marked resolved.' : 'Invoice inventory exception marked ignored.');
@@ -29822,11 +29964,17 @@ private function get_work_order_items_summary_html($work_order_id) {
             'truck_key' => $truck_key,
             'truck_label' => $this->get_inventory_location_display_name($location_map[$truck_key]),
             'quantity' => $quantity,
+            'requested_quantity' => $quantity,
+            'fulfilled_quantity_total' => 0,
+            'remaining_quantity' => $quantity,
+            'last_fulfilled_quantity' => 0,
+            'fulfillment_history' => array(),
             'notes' => $notes,
             'status' => 'requested',
         );
 
         update_option('dmx_truck_inventory_requests', $requests, false);
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'truck_replenishment_request_submitted', 'object_type' => 'truck_replenishment_request', 'object_id' => (string) ($requests[count($requests)-1]['id'] ?? ''), 'object_label' => get_the_title($part_id), 'after_summary' => 'truck:' . $truck_key . ';requested_qty:' . $quantity));
         $this->redirect_with_message($tab, 'success', 'Truck inventory replenishment request submitted.');
     }
 
@@ -29848,6 +29996,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $decision_notes = sanitize_text_field(wp_unslash($_POST['truck_inventory_request_decision_notes'] ?? ''));
         $from_location_key = sanitize_key($_POST['truck_inventory_request_from_location_key'] ?? '');
         $transfer_notes = sanitize_text_field(wp_unslash($_POST['truck_inventory_request_transfer_notes'] ?? ''));
+        $fulfill_quantity = (float) ($_POST['truck_inventory_request_fulfill_quantity'] ?? 0);
 
         if ($request_id === '' || !in_array($decision, array('approve', 'reject', 'fulfill'), true)) {
             $this->redirect_with_message($tab, 'error', 'Invalid request action.');
@@ -29876,6 +30025,15 @@ private function get_work_order_items_summary_html($work_order_id) {
         }
 
         $request = $requests[$request_index];
+        $requested_quantity = (float) ($request['requested_quantity'] ?? ($request['quantity'] ?? 0));
+        $fulfilled_total = (float) ($request['fulfilled_quantity_total'] ?? 0);
+        $remaining_quantity = (float) ($request['remaining_quantity'] ?? max(0, $requested_quantity - $fulfilled_total));
+        if ($requested_quantity <= 0) {
+            $requested_quantity = (float) ($request['quantity'] ?? 0);
+        }
+        if ($remaining_quantity < 0) {
+            $remaining_quantity = 0;
+        }
         $current_status = sanitize_key((string) ($request['status'] ?? 'requested'));
         $now = current_time('mysql');
         $current_user_id = get_current_user_id();
@@ -29891,6 +30049,7 @@ private function get_work_order_items_summary_html($work_order_id) {
                 $requests[$request_index]['decision_notes'] = $decision_notes;
             }
             update_option('dmx_truck_inventory_requests', $requests, false);
+            $this->add_audit_log_entry(array('company_key' => $company_key, 'action' => 'truck_replenishment_request_approved', 'object_type' => 'truck_replenishment_request', 'object_id' => (string) $request_id, 'object_label' => sanitize_text_field((string) ($request['part_name'] ?? '')), 'before_summary' => 'status:' . $current_status, 'after_summary' => 'status:approved;truck:' . sanitize_key((string) ($request['truck_key'] ?? '')) . ';requested_qty:' . (float) ($request['quantity'] ?? 0)));
             $this->redirect_with_message($tab, 'success', 'Truck replenishment request approved.');
         }
 
@@ -29905,11 +30064,12 @@ private function get_work_order_items_summary_html($work_order_id) {
                 $requests[$request_index]['decision_notes'] = $decision_notes;
             }
             update_option('dmx_truck_inventory_requests', $requests, false);
+            $this->add_audit_log_entry(array('company_key' => $company_key, 'action' => 'truck_replenishment_request_rejected', 'object_type' => 'truck_replenishment_request', 'object_id' => (string) $request_id, 'object_label' => sanitize_text_field((string) ($request['part_name'] ?? '')), 'before_summary' => 'status:' . $current_status, 'after_summary' => 'status:rejected;truck:' . sanitize_key((string) ($request['truck_key'] ?? ''))));
             $this->redirect_with_message($tab, 'success', 'Truck replenishment request rejected.');
         }
 
-        if ($current_status !== 'approved') {
-            $this->redirect_with_message($tab, 'error', 'Only approved requests can be fulfilled.');
+        if (!in_array($current_status, array('approved', 'partially_fulfilled'), true)) {
+            $this->redirect_with_message($tab, 'error', 'Only approved or partially fulfilled requests can be fulfilled.');
         }
         if ($from_location_key === '') {
             $this->redirect_with_message($tab, 'error', 'Select a warehouse location for fulfillment.');
@@ -29925,32 +30085,54 @@ private function get_work_order_items_summary_html($work_order_id) {
         }
 
         $part_id = absint($request['part_id'] ?? 0);
-        $quantity = (float) ($request['quantity'] ?? 0);
-        if ($part_id <= 0 || get_post_type($part_id) !== self::PART_POST_TYPE || $quantity <= 0) {
+        if ($part_id <= 0 || get_post_type($part_id) !== self::PART_POST_TYPE || $requested_quantity <= 0) {
             $this->redirect_with_message($tab, 'error', 'This request has invalid part or quantity data.');
+        }
+        if ($remaining_quantity <= 0) {
+            $this->redirect_with_message($tab, 'error', 'This request has no remaining quantity to fulfill.');
+        }
+        if ($fulfill_quantity <= 0) {
+            $fulfill_quantity = $remaining_quantity;
+        }
+        if ($fulfill_quantity <= 0 || $fulfill_quantity > $remaining_quantity) {
+            $this->redirect_with_message($tab, 'error', 'Fulfillment quantity must be greater than zero and no more than the remaining quantity.');
         }
 
         $balances = $this->get_inventory_balances();
         $available = isset($balances[$part_id][$from_location_key]) ? (float) $balances[$part_id][$from_location_key] : 0;
-        if ($available < $quantity) {
+        if ($available < $fulfill_quantity) {
             $this->redirect_with_message($tab, 'error', 'Not enough stock in the selected warehouse location to fulfill this request.');
         }
 
-        $balances[$part_id][$from_location_key] = $available - $quantity;
-        $balances[$part_id][$truck_key] = isset($balances[$part_id][$truck_key]) ? (float) $balances[$part_id][$truck_key] + $quantity : $quantity;
+        $balances[$part_id][$from_location_key] = $available - $fulfill_quantity;
+        $balances[$part_id][$truck_key] = isset($balances[$part_id][$truck_key]) ? (float) $balances[$part_id][$truck_key] + $fulfill_quantity : $fulfill_quantity;
         $this->save_inventory_balances($balances);
 
         $ledger_notes = $transfer_notes !== '' ? $transfer_notes : ('Truck request ' . $request_id);
-        $this->add_inventory_activity('transfer', $part_id, $from_location_key, $quantity, $ledger_notes, $truck_key);
+        $this->add_inventory_activity('transfer', $part_id, $from_location_key, $fulfill_quantity, $ledger_notes, $truck_key);
 
-        $requests[$request_index]['status'] = 'fulfilled';
+        $new_fulfilled_total = $fulfilled_total + $fulfill_quantity;
+        $new_remaining = max(0, $requested_quantity - $new_fulfilled_total);
+        $new_status = $new_remaining > 0 ? 'partially_fulfilled' : 'fulfilled';
+        $requests[$request_index]['requested_quantity'] = $requested_quantity;
+        $requests[$request_index]['fulfilled_quantity_total'] = $new_fulfilled_total;
+        $requests[$request_index]['remaining_quantity'] = $new_remaining;
+        $requests[$request_index]['last_fulfilled_quantity'] = $fulfill_quantity;
+        $requests[$request_index]['status'] = $new_status;
         $requests[$request_index]['fulfilled_by'] = $current_user_id;
         $requests[$request_index]['fulfilled_at'] = $now;
+        $history = isset($requests[$request_index]['fulfillment_history']) && is_array($requests[$request_index]['fulfillment_history']) ? $requests[$request_index]['fulfillment_history'] : array();
+        $history[] = array('qty' => $fulfill_quantity, 'at' => $now, 'by' => $current_user_id, 'from_location_key' => $from_location_key, 'to_location_key' => $truck_key);
+        $requests[$request_index]['fulfillment_history'] = $history;
+        $requests[$request_index]['last_source_location_key'] = $from_location_key;
+        $requests[$request_index]['destination_truck_key'] = $truck_key;
         if ($transfer_notes !== '') {
             $requests[$request_index]['transfer_notes'] = $transfer_notes;
         }
         update_option('dmx_truck_inventory_requests', $requests, false);
-        $this->redirect_with_message($tab, 'success', 'Truck replenishment request fulfilled and inventory transferred.');
+        $action_key = $new_status === 'fulfilled' && $fulfilled_total > 0 ? 'truck_replenishment_fully_fulfilled_after_partial' : ($new_status === 'partially_fulfilled' ? 'truck_replenishment_partially_fulfilled' : 'truck_replenishment_request_fulfilled');
+        $this->add_audit_log_entry(array('company_key' => $company_key, 'action' => $action_key, 'object_type' => 'truck_replenishment_request', 'object_id' => (string) $request_id, 'object_label' => sanitize_text_field((string) ($request['part_name'] ?? '')), 'before_summary' => 'prev_status:' . $current_status . ';requested:' . $requested_quantity . ';fulfilled_total:' . $fulfilled_total . ';remaining:' . $remaining_quantity, 'after_summary' => 'new_status:' . $new_status . ';truck:' . $truck_key . ';from:' . $from_location_key . ';fulfilled_this:' . $fulfill_quantity . ';fulfilled_total:' . $new_fulfilled_total . ';remaining:' . $new_remaining . ';requested:' . $requested_quantity . ';technician:' . absint($request['requested_by_user_id'] ?? 0)));
+        $this->redirect_with_message($tab, 'success', $new_status === 'partially_fulfilled' ? 'Truck replenishment request partially fulfilled and kept open.' : 'Truck replenishment request fulfilled and inventory transferred.');
     }
 
     private function render_technician_assigned_truck_inventory_view($locations, $balances, $parts, $is_admin = false) {
@@ -31487,6 +31669,13 @@ private function get_work_order_items_summary_html($work_order_id) {
             'record_count' => $record_count,
             'file_count' => $file_count,
         ));
+        $this->add_audit_log_entry(array(
+            'company_key' => $this->get_backup_company_key(),
+            'action' => 'backup_export_download',
+            'object_type' => 'backup_export',
+            'object_id' => sanitize_file_name($filename),
+            'after_summary' => $history_type . ';records:' . $record_count . ';files:' . $file_count,
+        ));
 
         nocache_headers();
         header('Content-Type: application/json; charset=utf-8');
@@ -31545,6 +31734,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $requests = $this->get_company_restore_requests($company_key);
         array_unshift($requests, $request);
         $this->save_company_restore_requests($requests, $company_key);
+        $this->add_audit_log_entry(array('company_key' => $company_key, 'action' => 'recovery_restore_request_submitted', 'object_type' => 'restore_request', 'object_id' => (string) ($request['id'] ?? ''), 'object_label' => $company_name, 'after_summary' => 'type:' . $restore_type . ';urgency:' . $request['urgency']));
 
         $subject = 'DoorMatrix Restore Request - ' . $company_name;
         $body = "A restore request was submitted inside DoorMatrix.\n\n";
@@ -31651,6 +31841,7 @@ private function get_work_order_items_summary_html($work_order_id) {
 
         $count = count(array_unique($restored_ids));
         $message = $count > 1 ? $count . ' records restored from the Recovery Bin.' : 'Record restored from the Recovery Bin.';
+        $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'recovery_restore_action', 'object_type' => 'recovery_record', 'object_id' => (string) $record_id, 'after_summary' => 'count:' . $count));
         $this->redirect_with_message('settings', 'success', $message);
     }
 
@@ -31782,6 +31973,25 @@ private function get_work_order_items_summary_html($work_order_id) {
         return ob_get_clean();
     }
 
+    private function render_audit_log_panel() {
+        $filters = array(
+            'company_key' => sanitize_key($_GET['dmx_audit_company'] ?? ''),
+            'action' => sanitize_key($_GET['dmx_audit_action'] ?? ''),
+            'object_type' => sanitize_key($_GET['dmx_audit_object'] ?? ''),
+        );
+        $rows = $this->get_visible_audit_log_entries(50, $filters);
+        ob_start();
+        echo '<div class="dmx-form-card" style="margin-top:18px;"><h4 class="dmx-panel-title">Audit Log (Recent)</h4>';
+        echo '<p>Append-only security/business activity history. Retention limit: ' . esc_html((string) self::AUDIT_LOG_RETENTION_LIMIT) . ' entries.</p>';
+        if (empty($rows)) { echo '<div class="dmx-empty">No audit records found.</div></div>'; return ob_get_clean(); }
+        echo '<div class="dmx-table-wrap"><table class="dmx-table"><thead><tr><th>When</th><th>Company</th><th>Action</th><th>Object</th><th>Actor</th></tr></thead><tbody>';
+        foreach ($rows as $row) {
+            echo '<tr><td>' . esc_html((string) ($row['timestamp'] ?? '')) . '</td><td>' . esc_html((string) ($row['company_key'] ?? '')) . '</td><td>' . esc_html((string) ($row['action'] ?? '')) . '</td><td>' . esc_html((string) ($row['object_type'] ?? '') . ' #' . (string) ($row['object_id'] ?? '')) . '</td><td>' . esc_html((string) ($row['actor_display_name'] ?? '')) . '</td></tr>';
+        }
+        echo '</tbody></table></div></div>';
+        return ob_get_clean();
+    }
+
     private function render_settings_backup_page() {
         if (!$this->current_user_can_view_settings()) {
             return '<div class="dmx-message dmx-message-error">Only company managers can view Backup &amp; Recovery.</div>';
@@ -31830,6 +32040,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         echo '</div>';
 
         echo $this->render_recovery_bin_table();
+        echo $this->render_audit_log_panel();
 
         echo '<div class="dmx-form-card" style="margin-top:18px;">';
         echo '<h4 class="dmx-panel-title">Request Record Restore or Full Restore Review</h4>';
