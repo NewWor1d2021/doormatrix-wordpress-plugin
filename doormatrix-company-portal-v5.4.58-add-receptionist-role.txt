@@ -7725,14 +7725,16 @@ class DoorMatrix_Company_Portal {
         $trial = $this->get_company_trial_data((string) get_user_meta($user_id, '_dmx_company_key', true));
 
         $subject = 'Welcome to DoorMatrix — your trial is approved';
-        $body = "Your DoorMatrix account has been approved.\n\n";
+        $requested_plan = $this->get_company_plan_label($this->get_requested_plan_key_for_user($user_id));
+        $body = "Welcome to DoorMatrix.\n\n";
         $body .= "Company: " . $company_name . "\n";
         $body .= "Role: " . $role_label . "\n";
-        $body .= "Portal: " . $this->get_portal_page_url() . "\n";
-        $body .= "Welcome to DoorMatrix. You can now complete your startup setup.\n";
+        $body .= "Portal Login: " . trailingslashit(home_url('/portal/')) . "\n";
+        $body .= "Your selected trial plan is approved: " . $requested_plan . "\n";
+        $body .= "You can now complete Start-Up Setup.\n";
 
         if ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes' && $trial['status'] === 'trial' && !empty($trial['ends_at'])) {
-            $body .= "\nYour 14-day free trial is now active and includes full DoorMatrix access until " . date_i18n(get_option('date_format'), strtotime($trial['ends_at'])) . ".";
+            $body .= "\nYour 14-day trial is active. Trial end date: " . date_i18n(get_option('date_format'), strtotime($trial['ends_at'])) . ".";
         }
 
         $this->send_portal_notification_email($user->user_email, $subject, $body);
@@ -9104,7 +9106,7 @@ class DoorMatrix_Company_Portal {
             $status = (string) get_user_meta($owner->ID, '_dmx_account_status', true);
             $is_owner = (string) get_user_meta($owner->ID, '_dmx_is_company_owner', true) === 'yes';
             $is_verified = (string) get_user_meta($owner->ID, '_dmx_email_verified', true) === 'yes';
-            if ($status !== 'pending' || !$is_owner || !$is_verified) {
+            if (!in_array($status, array('pending', 'pending_admin_approval'), true) || !$is_owner || !$is_verified) {
                 continue;
             }
 
@@ -14525,7 +14527,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             $companies[$company_key]['users_total']++;
 
             $status = (string) get_user_meta($user->ID, '_dmx_account_status', true);
-            if ($status === 'pending') {
+            if (in_array($status, array('pending', 'pending_email_verification', 'email_verification_required', 'pending_admin_approval'), true)) {
                 $companies[$company_key]['users_pending']++;
             }
 
@@ -15849,6 +15851,21 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
         $company_users = $this->get_company_users($company_key, $this->get_portal_role_keys());
         $record_labels = $this->get_company_record_type_labels();
+        $owner_user = null;
+        foreach ($company_users as $company_user_candidate) {
+            if ((string) get_user_meta($company_user_candidate->ID, '_dmx_is_company_owner', true) === 'yes') {
+                $owner_user = $company_user_candidate;
+                break;
+            }
+        }
+        $owner_status = $owner_user ? (string) get_user_meta($owner_user->ID, '_dmx_account_status', true) : '';
+        $owner_verified = $owner_user && (string) get_user_meta($owner_user->ID, '_dmx_email_verified', true) === 'yes';
+        $owner_requested_type = $owner_user ? (string) get_user_meta($owner_user->ID, '_dmx_requested_account_type', true) : '';
+        $owner_requested_plan = $owner_user ? $this->get_requested_plan_key_for_user($owner_user->ID) : $company['plan'];
+        $owner_ready_for_trial_approval = ($owner_user && $owner_verified && $owner_status === 'pending_admin_approval' && $owner_requested_type === 'trial');
+        $company_status_label = $owner_ready_for_trial_approval ? 'Ready for Admin Approval' : $this->get_company_access_status_label($trial['status'] === 'legacy' ? 'active' : $trial['status']);
+        $company_plan_label = $owner_ready_for_trial_approval ? ('Requested ' . $this->get_company_plan_label($owner_requested_plan)) : $this->get_company_plan_label($company['plan']);
+        $company_trial_summary = $owner_ready_for_trial_approval ? 'Not started / awaiting approval' : $this->get_company_access_summary($company_key);
 
         ob_start(); ?>
         <div class="dmx-page-head">
@@ -15863,9 +15880,9 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         </div>
 
         <div class="dmx-grid">
-            <div class="dmx-card"><div class="dmx-stat-label">Plan</div><div class="dmx-stat-number" style="font-size:26px;"><?php echo esc_html($this->get_company_plan_label($company['plan'])); ?></div></div>
-            <div class="dmx-card"><div class="dmx-stat-label">Account Status</div><div class="dmx-stat-number" style="font-size:22px;"><?php echo esc_html($this->get_company_access_status_label($trial['status'] === 'legacy' ? 'active' : $trial['status'])); ?></div></div>
-            <div class="dmx-card"><div class="dmx-stat-label">Trial</div><div class="dmx-stat-number" style="font-size:20px;"><?php echo esc_html($this->get_company_access_summary($company_key)); ?></div></div>
+            <div class="dmx-card"><div class="dmx-stat-label">Plan</div><div class="dmx-stat-number" style="font-size:26px;"><?php echo esc_html($company_plan_label); ?></div></div>
+            <div class="dmx-card"><div class="dmx-stat-label">Account Status</div><div class="dmx-stat-number" style="font-size:22px;"><?php echo esc_html($company_status_label); ?></div></div>
+            <div class="dmx-card"><div class="dmx-stat-label">Trial</div><div class="dmx-stat-number" style="font-size:20px;"><?php echo esc_html($company_trial_summary); ?></div></div>
             <div class="dmx-card"><div class="dmx-stat-label">Users</div><div class="dmx-stat-number"><?php echo esc_html((string) $company['users_total']); ?></div></div>
             <div class="dmx-card"><div class="dmx-stat-label">Saved Records</div><div class="dmx-stat-number"><?php echo esc_html((string) $company['records_total']); ?></div></div>
         </div>
@@ -15873,6 +15890,21 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         <div class="dmx-panels">
             <div class="dmx-form-card">
                 <h4 class="dmx-panel-title">Plan, Trial, and Access Controls</h4>
+                <?php if ($owner_user && $owner_requested_type === 'trial') : ?>
+                    <div class="dmx-help-box" style="margin-bottom:12px;">
+                        <?php if ($owner_ready_for_trial_approval) : ?>
+                            <form method="post" style="margin:0;">
+                                <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
+                                <input type="hidden" name="dmx_portal_action" value="approve_team_member">
+                                <input type="hidden" name="dmx_tab" value="staff">
+                                <input type="hidden" name="team_user_id" value="<?php echo esc_attr((string) $owner_user->ID); ?>">
+                                <button type="submit" class="dmx-btn">Approve <?php echo esc_html($this->get_company_plan_label($owner_requested_plan)); ?> Trial</button>
+                            </form>
+                        <?php else : ?>
+                            <span class="dmx-inline-note"><strong>Waiting for customer email verification.</strong></span>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
                 <form method="post">
                     <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
                     <input type="hidden" name="dmx_portal_action" value="save_company_admin_controls">
@@ -18309,15 +18341,15 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                                         </div>
                                     </div>
 
-                                    <button type="submit" class="dmx-auth-submit">Request Company Account</button>
                                     <div class="dmx-field">
-                                        <label>Requested Trial Plan</label>
+                                        <label>Choose your trial plan</label>
                                         <select name="dmx_signup_requested_plan">
                                             <?php foreach ($this->get_trial_request_plan_options() as $plan_key => $plan_label) : ?>
                                                 <option value="<?php echo esc_attr($plan_key); ?>" <?php selected($plan_key, 'operations'); ?>><?php echo esc_html($plan_label); ?></option>
                                             <?php endforeach; ?>
                                         </select>
                                     </div>
+                                    <button type="submit" class="dmx-auth-submit">Request Company Account</button>
 
                                     <p class="dmx-auth-footnote">DoorMatrix admin must approve this account first. Your 14-day free trial with full DoorMatrix access starts after approval. Approval emails come from admin@doormatrix.ca.</p>
                                 </form>
