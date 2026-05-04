@@ -7964,11 +7964,25 @@ class DoorMatrix_Company_Portal {
     public function block_unapproved_portal_login($user, $username, $password) {
         if ($user instanceof WP_User) {
             $is_portal_user = array_intersect((array) $user->roles, array(self::MANAGER_ROLE, self::ACCOUNTING_ROLE, self::STAFF_ROLE, self::SALES_ROLE, self::COORDINATOR_ROLE, self::TECHNICIAN_ROLE, self::WAREHOUSE_ROLE, self::PARTS_ROLE, self::RECEPTIONIST_ROLE, self::SUBCONTRACTOR_ROLE));
+            $status = (string) get_user_meta($user->ID, '_dmx_account_status', true);
+            $company_key = sanitize_title((string) get_user_meta($user->ID, '_dmx_company_key', true));
+
+            if ($status === 'deleted') {
+                return new WP_Error('dmx_account_removed', 'This DoorMatrix account has been removed. Please contact your company administrator.');
+            }
+
+            if (!empty($is_portal_user) && $company_key === '') {
+                return new WP_Error('dmx_account_removed', 'This DoorMatrix account has been removed. Please contact your company administrator.');
+            }
+
+            if (!empty($is_portal_user) && in_array($company_key, $this->get_archived_company_keys_list(), true)) {
+                return new WP_Error('dmx_account_removed', 'This DoorMatrix account has been removed. Please contact your company administrator.');
+            }
+
             if (!empty($is_portal_user) && !$this->is_user_portal_approved($user->ID)) {
                 if ($this->user_has_active_or_trial_company_access($user->ID, $user)) {
                     return $user;
                 }
-                $status = (string) get_user_meta($user->ID, '_dmx_account_status', true);
                 $message = 'Your DoorMatrix account is pending DoorMatrix admin approval.';
                 if ($status === 'inactive') {
                     $message = 'Your DoorMatrix account is inactive. Please contact your company manager.';
@@ -15538,6 +15552,14 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         return ob_get_clean();
     }
 
+    private function get_archived_company_keys_list() {
+        $archived = $this->get_archived_company_keys();
+        if (!is_array($archived)) {
+            return array();
+        }
+        return array_map('sanitize_title', array_keys($archived));
+    }
+
     private function archive_company_account() {
         if (!current_user_can('manage_options')) { wp_die(esc_html__('You do not have permission.', 'doormatrix')); }
         $company_key = sanitize_title((string) ($_POST['company_key'] ?? ''));
@@ -15561,17 +15583,60 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         $confirm = sanitize_text_field((string) ($_POST['confirm_company_text'] ?? ''));
         if ($company_key === '' || in_array($company_key, array('gdi-operators', 'airdrie'), true)) { $this->redirect_admin_company_with_message($company_key, 'error', 'Delete skipped for protected or missing company key.'); }
         if ($confirm !== $company_key && strcasecmp($confirm, $company_name) !== 0) { $this->redirect_admin_company_with_message($company_key, 'error', 'Confirmation text mismatch. Nothing deleted.'); }
-        $counts = array('users_affected'=>0,'customers_removed'=>0,'quotes_removed'=>0,'invoices_removed'=>0,'work_orders_removed'=>0,'inventory_records_removed'=>0,'messages_removed'=>0,'settings_options_removed'=>0,'skipped_records'=>0,'errors'=>0);
+
+        $counts = array('users_deleted'=>0,'users_disabled'=>0,'users_skipped_admin'=>0,'users_skipped_current_user'=>0,'customers_removed'=>0,'quotes_removed'=>0,'invoices_removed'=>0,'work_orders_removed'=>0,'inventory_records_removed'=>0,'messages_removed'=>0,'settings_options_removed'=>0,'skipped_records'=>0,'errors'=>0);
+
         foreach ($this->get_company_owned_post_types() as $post_type) {
             $ids = get_posts(array('post_type'=>$post_type,'post_status'=>'any','fields'=>'ids','posts_per_page'=>-1,'meta_key'=>'_dmx_company_key','meta_value'=>$company_key));
             foreach ($ids as $id) { wp_delete_post((int) $id, true); if ($post_type==='dm_customer') $counts['customers_removed']++; if ($post_type==='dm_quote') $counts['quotes_removed']++; if ($post_type==='dm_invoice') $counts['invoices_removed']++; if ($post_type==='dm_work_order') $counts['work_orders_removed']++; }
         }
-        foreach ($this->get_company_users($company_key, $this->get_portal_role_keys()) as $user) { update_user_meta($user->ID, '_dmx_account_status', 'deleted'); delete_user_meta($user->ID, '_dmx_company_key'); foreach ($this->get_portal_role_keys() as $role) { $user->remove_role($role); } $counts['users_affected']++; }
+
+        $current_user_id = get_current_user_id();
+        $company_users = get_users(array('meta_key'=>'_dmx_company_key','meta_value'=>$company_key,'fields'=>'all'));
+        foreach ($company_users as $user) {
+            $user_id = (int) $user->ID;
+            if ($user_id <= 0) { $counts['errors']++; continue; }
+
+            if ($user_id === $current_user_id) {
+                $counts['users_skipped_current_user']++;
+                continue;
+            }
+
+            if (user_can($user, 'manage_options') || in_array('administrator', (array) $user->roles, true)) {
+                $counts['users_skipped_admin']++;
+                continue;
+            }
+
+            $portal_roles = array_intersect((array) $user->roles, $this->get_portal_role_keys());
+            $safe_to_delete = !empty($portal_roles);
+
+            if ($safe_to_delete) {
+                if (!function_exists('wp_delete_user')) {
+                    require_once ABSPATH . 'wp-admin/includes/user.php';
+                }
+                $deleted = wp_delete_user($user_id);
+                if ($deleted) {
+                    $counts['users_deleted']++;
+                    continue;
+                }
+                $counts['errors']++;
+            }
+
+            foreach ($this->get_portal_role_keys() as $role) { $user->remove_role($role); }
+            update_user_meta($user_id, '_dmx_account_status', 'deleted');
+            update_user_meta($user_id, '_dmx_company_key', '');
+            update_user_meta($user_id, '_dmx_email_verified', 'no');
+            update_user_meta($user_id, '_dmx_is_company_owner', 'no');
+            update_user_meta($user_id, '_dmx_deleted_company_key', $company_key);
+            update_user_meta($user_id, '_dmx_deleted_at', current_time('mysql'));
+            $counts['users_disabled']++;
+        }
+
         foreach (array('dmx_company_profile_settings_' . $company_key,'dmx_company_backup_status_' . $company_key,'dmx_company_snapshots_' . $company_key,'dmx_startup_setup_' . $company_key) as $opt) { if (delete_option($opt)) { $counts['settings_options_removed']++; } }
         $this->set_company_access_status($company_key, 'cancelled', '', 'Deleted by admin');
         $summary = implode(';', array_map(function($k, $v){ return $k . ':' . $v; }, array_keys($counts), $counts));
-        $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'company_deleted','object_type'=>'company','object_label'=>$company_name,'after_summary'=>$summary));
-        $this->redirect_admin_company_with_message('', 'success', 'Company permanently deleted. ' . str_replace(';', ', ', $summary));
+        $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'company_deleted','object_type'=>'company','object_label'=>$company_name,'after_summary'=>'company_key:' . $company_key . ';' . $summary));
+        $this->redirect_admin_company_with_message('', 'success', 'Company permanently deleted. company_key:' . $company_key . ', ' . str_replace(';', ', ', $summary));
     }
 
     private function is_wordpress_admin_portal_preview() {
