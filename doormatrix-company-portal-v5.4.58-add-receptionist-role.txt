@@ -188,11 +188,7 @@ class DoorMatrix_Company_Portal {
         $company_name = trim((string) ($company['company_name'] ?? ''));
 
         if ($company_name === '') {
-            $company_name = trim((string) get_bloginfo('name'));
-        }
-
-        if ($company_name === '') {
-            $company_name = 'Company';
+            return 'DoorMatrix Portal';
         }
 
         return $company_name . ' Portal';
@@ -6213,9 +6209,25 @@ class DoorMatrix_Company_Portal {
     }
 
     private function user_can_access_portal() {
-        return current_user_can('manage_options')
-            || current_user_can('administrator')
-            || current_user_can(self::STAFF_ROLE)
+        if (current_user_can('manage_options') || current_user_can('administrator')) {
+            return true;
+        }
+
+        $user_id = get_current_user_id();
+        if ($user_id <= 0) {
+            return false;
+        }
+
+        if (!$this->is_user_portal_approved($user_id)) {
+            return false;
+        }
+
+        $company_key = sanitize_title((string) get_user_meta($user_id, '_dmx_company_key', true));
+        if ($company_key === '') {
+            return false;
+        }
+
+        return current_user_can(self::STAFF_ROLE)
             || current_user_can(self::MANAGER_ROLE)
             || current_user_can(self::ACCOUNTING_ROLE)
             || current_user_can(self::SALES_ROLE)
@@ -15749,6 +15761,15 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         );
     }
 
+    private function get_company_profile_settings_option_key($company_key = '') {
+        $company_key = sanitize_key((string) $company_key);
+        if ($company_key === '') {
+            return 'dmx_company_profile_settings';
+        }
+
+        return 'dmx_company_profile_settings_' . $company_key;
+    }
+
     private function get_company_profile_settings() {
         if ($this->dmx_admin_live_preview_mode) {
             $defaults = $this->get_default_company_profile_settings();
@@ -15769,10 +15790,26 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             return $preview;
         }
 
-        $settings = get_option('dmx_company_profile_settings', array());
-        if (!is_array($settings)) {
-            $settings = array();
+        $company_key = sanitize_key((string) $this->get_current_user_company_key());
+        if ($company_key === '') {
+            return $this->get_default_company_profile_settings();
         }
+
+        $settings = get_option($this->get_company_profile_settings_option_key($company_key), null);
+        if (!is_array($settings)) {
+            $legacy_settings = get_option('dmx_company_profile_settings', array());
+            if (is_array($legacy_settings) && !empty($legacy_settings)) {
+                $legacy_company = sanitize_key((string) ($legacy_settings['company_key'] ?? ''));
+                if ($legacy_company !== '' && $legacy_company === $company_key) {
+                    $settings = $legacy_settings;
+                } else {
+                    $settings = array();
+                }
+            } else {
+                $settings = array();
+            }
+        }
+
         return wp_parse_args($settings, $this->get_default_company_profile_settings());
     }
 
@@ -15781,7 +15818,15 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
     }
 
     private function update_company_profile_settings($settings) {
-        update_option('dmx_company_profile_settings', wp_parse_args($settings, $this->get_default_company_profile_settings()));
+        $company_key = sanitize_key((string) $this->get_current_user_company_key());
+        if ($company_key === '') {
+            return;
+        }
+
+        $settings = wp_parse_args($settings, $this->get_default_company_profile_settings());
+        $settings['company_key'] = $company_key;
+
+        update_option($this->get_company_profile_settings_option_key($company_key), $settings);
     }
 
     private function get_startup_setup_defaults() {
@@ -17617,6 +17662,17 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
     public function render_portal_shortcode() {
         if (!is_user_logged_in()) { return $this->render_login_required(); }
+
+        $user_id = get_current_user_id();
+        if ($user_id > 0 && !current_user_can('manage_options')) {
+            if ((string) get_user_meta($user_id, '_dmx_email_verified', true) !== 'yes') {
+                return '<div class="dmx-portal-wrap"><div class="dmx-message dmx-message-warning">Email verification is required before portal access. Enter your 6-digit verification code sent by DoorMatrix.</div></div>';
+            }
+            if ((string) get_user_meta($user_id, '_dmx_account_status', true) !== 'approved') {
+                return '<div class="dmx-portal-wrap"><div class="dmx-message dmx-message-warning">Your account is pending DoorMatrix admin approval.</div></div>';
+            }
+        }
+
         if (!$this->user_can_access_portal()) { return '<div class="dmx-portal-wrap"><div class="dmx-message dmx-message-error">You do not have permission to access this portal.</div></div>'; }
         if (!current_user_can('manage_options') && $this->current_company_trial_is_expired()) { return $this->render_trial_expired_screen(); }
         return $this->render_portal_screen(false);
@@ -17665,7 +17721,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
         $user = wp_get_current_user();
         $company_settings = $this->get_company_profile_settings();
-        $portal_logo_url = !empty($company_settings['logo_url']) ? $company_settings['logo_url'] : 'http://doormatrix.ca/wp-content/uploads/2026/04/ChatGPT-Image-Apr-1-2026-07_43_49-PM-e1775148933417.png';
+        $portal_logo_url = !empty($company_settings['logo_url']) ? $company_settings['logo_url'] : '';
         $portal_company_name = trim((string) ($company_settings['company_name'] ?? ''));
         if ($portal_company_name === '') {
             $portal_company_name = trim((string) ($company_settings['legal_name'] ?? ''));
@@ -17703,7 +17759,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             <div class="dmx-app-shell">
                 <aside class="dmx-app-sidebar">
                     <div class="dmx-app-logo">
-                        <img class="dmx-app-logo-image" src="<?php echo esc_url($portal_logo_url); ?>" alt="<?php echo esc_attr($portal_company_name); ?> logo">
+                        <?php if ($portal_logo_url !== '') : ?><img class="dmx-app-logo-image" src="<?php echo esc_url($portal_logo_url); ?>" alt="<?php echo esc_attr($portal_company_name); ?> logo"><?php else : ?><div class="dmx-app-logo-image" style="display:flex;align-items:center;justify-content:center;font-weight:700;color:#334155;"><?php echo esc_html(strtoupper(substr($portal_company_name !== '' ? $portal_company_name : 'DM', 0, 2))); ?></div><?php endif; ?>
                         <div class="dmx-app-logo-text dmx-app-logo-text-powered-only">
                             <span class="dmx-powered-by">Powered by DoorMatrix</span>
                         </div>
