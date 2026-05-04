@@ -6734,9 +6734,12 @@ class DoorMatrix_Company_Portal {
             $this->redirect_to_signup_target('error', 'Passwords do not match.', 'company');
         }
 
-        if ($this->get_company_manager_by_name($company_name)) {
+        $company_key = $this->normalize_company_name($company_name);
+        if ($this->get_company_manager_by_name($company_name) || !empty($this->get_pending_portal_users($company_key))) {
             $this->redirect_to_signup_target('error', 'That company already has a manager account. Please log in, or have your company manager create any additional team accounts.', 'company');
         }
+
+        $this->purge_company_registry_state($company_key, $email, 0);
 
         $user_id = $this->create_portal_user_account($company_name, $full_name, $email, $phone, $password, self::MANAGER_ROLE);
 
@@ -6796,7 +6799,8 @@ class DoorMatrix_Company_Portal {
             $this->redirect_to_signup_target('error', 'Security check failed. Please try again.', 'verify');
         }
         $user_id = absint($_POST['dmx_verify_user_id'] ?? 0);
-        $code = preg_replace('/[^0-9]/', '', (string) wp_unslash($_POST['dmx_email_verification_code'] ?? ''));
+        $code_raw = trim((string) wp_unslash($_POST['dmx_email_verification_code'] ?? ''));
+        $code = preg_replace('/[^0-9]/', '', $code_raw);
         if ($user_id <= 0 || strlen($code) !== 6) {
             $this->redirect_to_signup_target('error', 'Enter the 6-digit verification code.', 'verify', $user_id);
         }
@@ -6815,7 +6819,7 @@ class DoorMatrix_Company_Portal {
         if ($expires_ts <= 0 || $expires_ts < current_time('timestamp')) {
             $this->redirect_to_signup_target('error', 'That code is expired. Please resend a new code.', 'verify', $user_id);
         }
-        if (!wp_check_password($code, $meta['hash'])) {
+        if ($meta['hash'] === '' || !wp_check_password((string) $code, (string) $meta['hash'])) {
             update_user_meta($user_id, '_dmx_email_verify_attempts', $meta['attempts'] + 1);
             $this->redirect_to_signup_target('error', 'Incorrect code. Please try again.', 'verify', $user_id);
         }
@@ -15576,6 +15580,117 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         $this->redirect_admin_company_with_message($company_key, 'success', 'Company archived. users affected: ' . count($users));
     }
 
+
+    private function purge_company_registry_state($company_key, $owner_email = '', $owner_user_id = 0) {
+        $company_key = sanitize_title((string) $company_key);
+        $owner_email = sanitize_email((string) $owner_email);
+        $owner_user_id = absint($owner_user_id);
+        if ($company_key === '') {
+            return 0;
+        }
+
+        $removed = 0;
+
+        $trials = $this->get_company_trials();
+        if (isset($trials[$company_key])) {
+            unset($trials[$company_key]);
+            $this->save_company_trials($trials);
+            $removed++;
+        }
+
+        $plans = $this->get_company_plans();
+        if (isset($plans[$company_key])) {
+            unset($plans[$company_key]);
+            $this->save_company_plans($plans);
+            $removed++;
+        }
+
+        $archived = $this->get_archived_company_keys();
+        if (isset($archived[$company_key])) {
+            unset($archived[$company_key]);
+            update_option($this->get_company_archive_option_key(), $archived, false);
+            $removed++;
+        }
+
+        foreach (array(
+            'dmx_company_profile_settings_' . $company_key,
+            'dmx_company_backup_status_' . $company_key,
+            'dmx_company_snapshots_' . $company_key,
+            'dmx_company_backup_snapshots_' . $company_key,
+            'dmx_startup_setup_' . $company_key,
+            'dmx_restore_audit_log_' . $company_key,
+            'dmx_restore_requests_' . $company_key
+        ) as $opt) {
+            if (delete_option($opt)) {
+                $removed++;
+            }
+        }
+
+        $all_restore_requests = get_option('dmx_company_restore_requests', array());
+        if (is_array($all_restore_requests) && isset($all_restore_requests[$company_key])) {
+            unset($all_restore_requests[$company_key]);
+            update_option('dmx_company_restore_requests', $all_restore_requests, false);
+            $removed++;
+        }
+
+        $backup_history = get_option('dmx_company_backup_history', array());
+        if (is_array($backup_history) && isset($backup_history[$company_key])) {
+            unset($backup_history[$company_key]);
+            update_option('dmx_company_backup_history', $backup_history, false);
+            $removed++;
+        }
+
+        foreach (array('dmx_truck_inventory_requests', 'dmx_inventory_invoice_exceptions') as $opt_key) {
+            $rows = get_option($opt_key, array());
+            if (!is_array($rows) || empty($rows)) {
+                continue;
+            }
+            $before = count($rows);
+            $rows = array_values(array_filter($rows, function($row) use ($company_key) {
+                if (!is_array($row)) { return true; }
+                $row_company_key = sanitize_title((string) ($row['company_key'] ?? ($row['dmx_company_key'] ?? '')));
+                return $row_company_key !== $company_key;
+            }));
+            if (count($rows) !== $before) {
+                update_option($opt_key, $rows, false);
+                $removed++;
+            }
+        }
+
+        $pending_users = $this->get_pending_portal_users($company_key);
+        foreach ($pending_users as $pending_user) {
+            $pending_id = (int) $pending_user->ID;
+            if ($pending_id <= 0 || user_can($pending_user, 'manage_options') || in_array('administrator', (array) $pending_user->roles, true)) {
+                continue;
+            }
+            if (!function_exists('wp_delete_user')) {
+                require_once ABSPATH . 'wp-admin/includes/user.php';
+            }
+            wp_delete_user($pending_id);
+            $removed++;
+        }
+
+        if ($owner_email !== '') {
+            $owner_users = get_users(array('search' => $owner_email, 'search_columns' => array('user_email')));
+            foreach ($owner_users as $owner_user) {
+                $owner_id = (int) $owner_user->ID;
+                if ($owner_id <= 0 || ($owner_user_id > 0 && $owner_id !== $owner_user_id)) {
+                    continue;
+                }
+                if (sanitize_email($owner_user->user_email) !== $owner_email) {
+                    continue;
+                }
+                if (sanitize_title((string) get_user_meta($owner_id, '_dmx_deleted_company_key', true)) === $company_key) {
+                    delete_user_meta($owner_id, '_dmx_deleted_company_key');
+                    delete_user_meta($owner_id, '_dmx_deleted_at');
+                    $removed++;
+                }
+            }
+        }
+
+        return $removed;
+    }
+
     private function delete_company_account_permanently() {
         if (!current_user_can('manage_options')) { wp_die(esc_html__('You do not have permission.', 'doormatrix')); }
         $company_key = sanitize_title((string) ($_POST['company_key'] ?? ''));
@@ -15584,7 +15699,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         if ($company_key === '' || in_array($company_key, array('gdi-operators', 'airdrie'), true)) { $this->redirect_admin_company_with_message($company_key, 'error', 'Delete skipped for protected or missing company key.'); }
         if ($confirm !== $company_key && strcasecmp($confirm, $company_name) !== 0) { $this->redirect_admin_company_with_message($company_key, 'error', 'Confirmation text mismatch. Nothing deleted.'); }
 
-        $counts = array('users_deleted'=>0,'users_disabled'=>0,'users_skipped_admin'=>0,'users_skipped_current_user'=>0,'customers_removed'=>0,'quotes_removed'=>0,'invoices_removed'=>0,'work_orders_removed'=>0,'inventory_records_removed'=>0,'messages_removed'=>0,'settings_options_removed'=>0,'skipped_records'=>0,'errors'=>0);
+        $counts = array('users_deleted'=>0,'users_disabled'=>0,'users_skipped_admin'=>0,'users_skipped_current_user'=>0,'customers_removed'=>0,'quotes_removed'=>0,'invoices_removed'=>0,'work_orders_removed'=>0,'inventory_records_removed'=>0,'messages_removed'=>0,'settings_options_removed'=>0,'registry_entries_removed'=>0,'skipped_records'=>0,'errors'=>0);
 
         foreach ($this->get_company_owned_post_types() as $post_type) {
             $ids = get_posts(array('post_type'=>$post_type,'post_status'=>'any','fields'=>'ids','posts_per_page'=>-1,'meta_key'=>'_dmx_company_key','meta_value'=>$company_key));
@@ -15593,6 +15708,8 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
         $current_user_id = get_current_user_id();
         $company_users = get_users(array('meta_key'=>'_dmx_company_key','meta_value'=>$company_key,'fields'=>'all'));
+        $owner_email = '';
+        $owner_user_id = 0;
         foreach ($company_users as $user) {
             $user_id = (int) $user->ID;
             if ($user_id <= 0) { $counts['errors']++; continue; }
@@ -15605,6 +15722,11 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             if (user_can($user, 'manage_options') || in_array('administrator', (array) $user->roles, true)) {
                 $counts['users_skipped_admin']++;
                 continue;
+            }
+
+            if ($owner_email === '' && (string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes') {
+                $owner_email = sanitize_email($user->user_email);
+                $owner_user_id = $user_id;
             }
 
             $portal_roles = array_intersect((array) $user->roles, $this->get_portal_role_keys());
@@ -15632,8 +15754,9 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             $counts['users_disabled']++;
         }
 
-        foreach (array('dmx_company_profile_settings_' . $company_key,'dmx_company_backup_status_' . $company_key,'dmx_company_snapshots_' . $company_key,'dmx_startup_setup_' . $company_key) as $opt) { if (delete_option($opt)) { $counts['settings_options_removed']++; } }
+        $counts['registry_entries_removed'] = $this->purge_company_registry_state($company_key, $owner_email, $owner_user_id);
         $this->set_company_access_status($company_key, 'cancelled', '', 'Deleted by admin');
+        $counts['registry_entries_removed'] += $this->purge_company_registry_state($company_key, $owner_email, $owner_user_id);
         $summary = implode(';', array_map(function($k, $v){ return $k . ':' . $v; }, array_keys($counts), $counts));
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'company_deleted','object_type'=>'company','object_label'=>$company_name,'after_summary'=>'company_key:' . $company_key . ';' . $summary));
         $this->redirect_admin_company_with_message('', 'success', 'Company permanently deleted. company_key:' . $company_key . ', ' . str_replace(';', ', ', $summary));
