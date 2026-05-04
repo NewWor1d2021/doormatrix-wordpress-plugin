@@ -8316,6 +8316,12 @@ class DoorMatrix_Company_Portal {
             case 'extend_company_trial':
                 $this->extend_company_trial($tab);
                 break;
+            case 'archive_company_account':
+                $this->archive_company_account();
+                break;
+            case 'delete_company_account_permanently':
+                $this->delete_company_account_permanently();
+                break;
             case 'save_team_member_assignment':
                 $this->save_team_member_assignment($tab);
                 break;
@@ -14397,6 +14403,22 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         return $this->format_company_name_from_key($company_key);
     }
 
+
+    private function get_company_archive_option_key() {
+        return 'dmx_archived_company_keys_v1';
+    }
+
+    private function get_archived_company_keys() {
+        $archived = get_option($this->get_company_archive_option_key(), array());
+        return is_array($archived) ? $archived : array();
+    }
+
+    private function is_company_archived($company_key) {
+        $company_key = sanitize_title((string) $company_key);
+        $archived = $this->get_archived_company_keys();
+        return $company_key !== '' && !empty($archived[$company_key]);
+    }
+
     private function get_door_company_admin_records() {
         $users = get_users(array(
             'orderby' => 'display_name',
@@ -14451,6 +14473,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         }
 
         foreach ($companies as $company_key => &$company) {
+            $company['is_archived'] = $this->is_company_archived($company_key);
             foreach ($this->get_company_owned_post_types() as $post_type) {
                 $count = $this->count_company_records($company_key, $post_type);
                 $company['record_counts'][$post_type] = $count;
@@ -14512,6 +14535,12 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
     }
 
     private function render_admin_company_list_screen($companies) {
+        $show_archived = !empty($_GET['show_archived']) && sanitize_key((string) wp_unslash($_GET['show_archived'])) === '1';
+        if (!$show_archived) {
+            $companies = array_values(array_filter($companies, function($company) {
+                return empty($company['is_archived']);
+            }));
+        }
         $total_companies = count($companies);
         $active_count = 0;
         $trial_count = 0;
@@ -14537,6 +14566,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                 <p>Manage company accounts first. Each door company opens into its own users, plan, trial, and saved company data.</p>
             </div>
             <div class="dmx-action-row">
+                <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(add_query_arg('show_archived', $show_archived ? '0' : '1', $this->get_admin_company_url())); ?>"><?php echo esc_html($show_archived ? 'Hide Archived' : 'Show Archived/Deleted'); ?></a>
                 <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(admin_url('users.php')); ?>">Open WordPress Users</a>
                 <a class="dmx-btn" href="<?php echo esc_url(admin_url('admin.php?page=doormatrix-portal-team-members')); ?>">Account Approvals</a>
             </div>
@@ -15508,6 +15538,42 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         return ob_get_clean();
     }
 
+    private function archive_company_account() {
+        if (!current_user_can('manage_options')) { wp_die(esc_html__('You do not have permission.', 'doormatrix')); }
+        $company_key = sanitize_title((string) ($_POST['company_key'] ?? ''));
+        if ($company_key === '' || in_array($company_key, array('gdi-operators', 'airdrie'), true)) {
+            $this->redirect_admin_company_with_message($company_key, 'error', 'Archive skipped for protected or missing company key.');
+        }
+        $archived = $this->get_archived_company_keys();
+        $archived[$company_key] = array('archived_at' => current_time('mysql'), 'archived_by' => get_current_user_id());
+        update_option($this->get_company_archive_option_key(), $archived, false);
+        $users = $this->get_company_users($company_key, $this->get_portal_role_keys());
+        foreach ($users as $user) { update_user_meta($user->ID, '_dmx_account_status', 'deleted'); }
+        $this->set_company_access_status($company_key, 'cancelled', '', 'Archived by admin');
+        $this->add_audit_log_entry(array('company_key' => $company_key, 'action' => 'company_archived', 'object_type' => 'company', 'object_label' => $this->get_company_name_for_key($company_key), 'after_summary' => 'users_affected:' . count($users)));
+        $this->redirect_admin_company_with_message($company_key, 'success', 'Company archived. users affected: ' . count($users));
+    }
+
+    private function delete_company_account_permanently() {
+        if (!current_user_can('manage_options')) { wp_die(esc_html__('You do not have permission.', 'doormatrix')); }
+        $company_key = sanitize_title((string) ($_POST['company_key'] ?? ''));
+        $company_name = $this->get_company_name_for_key($company_key);
+        $confirm = sanitize_text_field((string) ($_POST['confirm_company_text'] ?? ''));
+        if ($company_key === '' || in_array($company_key, array('gdi-operators', 'airdrie'), true)) { $this->redirect_admin_company_with_message($company_key, 'error', 'Delete skipped for protected or missing company key.'); }
+        if ($confirm !== $company_key && strcasecmp($confirm, $company_name) !== 0) { $this->redirect_admin_company_with_message($company_key, 'error', 'Confirmation text mismatch. Nothing deleted.'); }
+        $counts = array('users_affected'=>0,'customers_removed'=>0,'quotes_removed'=>0,'invoices_removed'=>0,'work_orders_removed'=>0,'inventory_records_removed'=>0,'messages_removed'=>0,'settings_options_removed'=>0,'skipped_records'=>0,'errors'=>0);
+        foreach ($this->get_company_owned_post_types() as $post_type) {
+            $ids = get_posts(array('post_type'=>$post_type,'post_status'=>'any','fields'=>'ids','posts_per_page'=>-1,'meta_key'=>'_dmx_company_key','meta_value'=>$company_key));
+            foreach ($ids as $id) { wp_delete_post((int) $id, true); if ($post_type==='dm_customer') $counts['customers_removed']++; if ($post_type==='dm_quote') $counts['quotes_removed']++; if ($post_type==='dm_invoice') $counts['invoices_removed']++; if ($post_type==='dm_work_order') $counts['work_orders_removed']++; }
+        }
+        foreach ($this->get_company_users($company_key, $this->get_portal_role_keys()) as $user) { update_user_meta($user->ID, '_dmx_account_status', 'deleted'); delete_user_meta($user->ID, '_dmx_company_key'); foreach ($this->get_portal_role_keys() as $role) { $user->remove_role($role); } $counts['users_affected']++; }
+        foreach (array('dmx_company_profile_settings_' . $company_key,'dmx_company_backup_status_' . $company_key,'dmx_company_snapshots_' . $company_key,'dmx_startup_setup_' . $company_key) as $opt) { if (delete_option($opt)) { $counts['settings_options_removed']++; } }
+        $this->set_company_access_status($company_key, 'cancelled', '', 'Deleted by admin');
+        $summary = implode(';', array_map(function($k, $v){ return $k . ':' . $v; }, array_keys($counts), $counts));
+        $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'company_deleted','object_type'=>'company','object_label'=>$company_name,'after_summary'=>$summary));
+        $this->redirect_admin_company_with_message('', 'success', 'Company permanently deleted. ' . str_replace(';', ', ', $summary));
+    }
+
     private function is_wordpress_admin_portal_preview() {
         return is_admin() && current_user_can('manage_options');
     }
@@ -15660,6 +15726,24 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
         <?php echo $this->render_admin_company_backup_restore_panel($company_key, $company); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
 
+        <div class="dmx-card" style="margin-top:18px;border:1px solid #f0b7b7;background:#fff5f5;">
+            <h4 class="dmx-panel-title" style="color:#9b1c1c;">Danger Zone</h4>
+            <p><strong>This removes the company account and related portal data. Use only for test accounts or confirmed cancellations.</strong></p>
+            <form method="post" style="margin-bottom:12px;">
+                <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
+                <input type="hidden" name="dmx_portal_action" value="archive_company_account">
+                <input type="hidden" name="company_key" value="<?php echo esc_attr($company_key); ?>">
+                <button type="submit" class="dmx-btn dmx-btn-secondary">Archive Company</button>
+            </form>
+            <form method="post">
+                <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
+                <input type="hidden" name="dmx_portal_action" value="delete_company_account_permanently">
+                <input type="hidden" name="company_key" value="<?php echo esc_attr($company_key); ?>">
+                <label><strong>Type company key or company name to confirm permanent delete.</strong></label>
+                <input type="text" name="confirm_company_text" value="" placeholder="<?php echo esc_attr($company_key . ' or ' . $company['company_name']); ?>" style="width:100%;max-width:420px;">
+                <p><button type="submit" class="dmx-btn" style="background:#b91c1c;">Permanently Delete Test Company</button></p>
+            </form>
+        </div>
         <div class="dmx-card" style="margin-top:18px;">
             <h4 class="dmx-panel-title">Company Users</h4>
             <div class="dmx-table-wrap">
