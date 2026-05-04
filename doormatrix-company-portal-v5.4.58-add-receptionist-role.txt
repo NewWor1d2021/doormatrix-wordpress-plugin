@@ -8338,6 +8338,36 @@ class DoorMatrix_Company_Portal {
     }
 
 
+    private function dmx_stamp_attachment_ownership($attachment_id, $parent_post_id = 0, $parent_post_type = '', $company_key = '') {
+        $attachment_id = (int) $attachment_id;
+        $parent_post_id = (int) $parent_post_id;
+
+        if ($attachment_id <= 0) {
+            return false;
+        }
+
+        if ($company_key === '' && $parent_post_id > 0) {
+            $company_key = (string) get_post_meta($parent_post_id, '_dmx_company_key', true);
+        }
+
+        if ($company_key !== '') {
+            update_post_meta($attachment_id, '_dmx_company_key', sanitize_text_field($company_key));
+        }
+
+        if ($parent_post_id > 0) {
+            update_post_meta($attachment_id, '_dmx_parent_post_id', $parent_post_id);
+        }
+
+        if ($parent_post_type !== '') {
+            update_post_meta($attachment_id, '_dmx_parent_post_type', sanitize_key($parent_post_type));
+        }
+
+        update_post_meta($attachment_id, '_dmx_uploaded_by', get_current_user_id());
+        update_post_meta($attachment_id, '_dmx_uploaded_at', current_time('mysql', true));
+
+        return true;
+    }
+
     private function handle_document_photo_uploads($post_id, $input_name) {
         if ($post_id <= 0 || empty($_FILES[$input_name])) {
             return;
@@ -8394,6 +8424,12 @@ class DoorMatrix_Company_Portal {
 
                 $attachment_id = wp_insert_attachment($attachment, $upload['file'], $post_id);
                 if ($attachment_id && !is_wp_error($attachment_id)) {
+                    $this->dmx_stamp_attachment_ownership(
+                        $attachment_id,
+                        $post_id,
+                        get_post_type($post_id),
+                        (string) get_post_meta($post_id, '_dmx_company_key', true)
+                    );
                     $this->stamp_attachment_company_ownership($attachment_id, $post_id);
                     $metadata = wp_generate_attachment_metadata($attachment_id, $upload['file']);
                     if (!is_wp_error($metadata)) {
@@ -8430,7 +8466,7 @@ class DoorMatrix_Company_Portal {
             <?php if (!empty($photos)) : ?>
                 <div class="dmx-mini-links" style="margin-top:10px;">
                     <?php foreach ($photos as $photo) : ?>
-                        <?php $photo_id = absint($photo['id'] ?? 0); $photo_url = $photo_id > 0 ? $this->get_secure_attachment_download_url($photo_id, $post_id) : ''; ?>
+                        <?php $photo_id = absint($photo['attachment_id'] ?? ($photo['id'] ?? ($photo['media_id'] ?? 0))); $photo_url = $photo_id > 0 ? $this->get_secure_attachment_download_url($photo_id, $post_id) : ''; ?>
                         <a href="<?php echo esc_url($photo_url); ?>" target="_blank"><?php echo esc_html($photo['name'] ?? 'Photo'); ?></a>
                     <?php endforeach; ?>
                 </div>
@@ -8519,6 +8555,12 @@ class DoorMatrix_Company_Portal {
 
                 $attachment_id = wp_insert_attachment($attachment, $upload['file'], $post_id);
                 if ($attachment_id && !is_wp_error($attachment_id)) {
+                    $this->dmx_stamp_attachment_ownership(
+                        $attachment_id,
+                        $post_id,
+                        get_post_type($post_id),
+                        (string) get_post_meta($post_id, '_dmx_company_key', true)
+                    );
                     $this->stamp_attachment_company_ownership($attachment_id, $post_id);
                     $metadata = wp_generate_attachment_metadata($attachment_id, $upload['file']);
                     if (!is_wp_error($metadata)) {
@@ -8567,17 +8609,17 @@ class DoorMatrix_Company_Portal {
         update_post_meta($attachment_id, '_dmx_uploaded_at', current_time('mysql'));
     }
 
-    private function get_secure_attachment_download_url($attachment_id, $parent_id) {
-        $attachment_id = absint($attachment_id);
-        $parent_id = absint($parent_id);
-        if ($attachment_id <= 0 || $parent_id <= 0) {
+    private function get_secure_attachment_download_url($attachment_id, $parent_post_id) {
+        $attachment_id = (int) $attachment_id;
+        $parent_post_id = (int) $parent_post_id;
+        if ($attachment_id <= 0 || $parent_post_id <= 0) {
             return '';
         }
         return add_query_arg(array(
             'action' => 'dmx_download_attachment',
             'attachment_id' => $attachment_id,
-            'parent_id' => $parent_id,
-            'nonce' => wp_create_nonce('dmx_download_attachment_' . $attachment_id . '_' . $parent_id),
+            'parent_id' => $parent_post_id,
+            '_wpnonce' => wp_create_nonce('dmx_download_attachment_' . $attachment_id . '_' . $parent_post_id),
         ), admin_url('admin-post.php'));
     }
 
@@ -8632,7 +8674,7 @@ class DoorMatrix_Company_Portal {
                                     <td><?php echo esc_html($document['notes'] ?? ''); ?></td>
                                     <td><?php echo esc_html(!empty($document['uploaded_at']) ? date_i18n(get_option('date_format'), strtotime($document['uploaded_at'])) : ''); ?></td>
                                     <td>
-                                        <?php $document_id = absint($document['id'] ?? 0); $download_url = $document_id > 0 ? $this->get_secure_attachment_download_url($document_id, $post_id) : ''; ?>
+                                        <?php $document_id = absint($document['attachment_id'] ?? ($document['id'] ?? ($document['media_id'] ?? 0))); $download_url = $document_id > 0 ? $this->get_secure_attachment_download_url($document_id, $post_id) : ''; ?>
                                         <?php if ($download_url !== '') : ?>
                                             <a class="dmx-btn dmx-btn-secondary" style="padding:8px 10px;font-size:12px;" href="<?php echo esc_url($download_url); ?>" target="_blank">Download</a>
                                         <?php endif; ?>
@@ -8712,13 +8754,24 @@ class DoorMatrix_Company_Portal {
         if ($parent_id <= 0 || $attachment_id <= 0) {
             return false;
         }
+        $attachment_url = (string) wp_get_attachment_url($attachment_id);
         foreach (array('_dmx_quote_documents', '_dmx_document_photos') as $meta_key) {
             $rows = get_post_meta($parent_id, $meta_key, true);
             if (!is_array($rows)) {
                 continue;
             }
             foreach ($rows as $row) {
-                if (is_array($row) && absint($row['id'] ?? 0) === $attachment_id) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                if (
+                    absint($row['id'] ?? 0) === $attachment_id
+                    || absint($row['attachment_id'] ?? 0) === $attachment_id
+                    || absint($row['media_id'] ?? 0) === $attachment_id
+                ) {
+                    return true;
+                }
+                if ($attachment_url !== '' && (string) ($row['url'] ?? '') === $attachment_url) {
                     return true;
                 }
             }
@@ -8732,7 +8785,7 @@ class DoorMatrix_Company_Portal {
         }
         $attachment_id = absint($_GET['attachment_id'] ?? 0);
         $parent_id = absint($_GET['parent_id'] ?? 0);
-        $nonce = sanitize_text_field(wp_unslash($_GET['nonce'] ?? ''));
+        $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? ''));
         if ($attachment_id <= 0 || $parent_id <= 0 || !wp_verify_nonce($nonce, 'dmx_download_attachment_' . $attachment_id . '_' . $parent_id)) {
             wp_die(esc_html__('Invalid file download request.', 'doormatrix'));
         }
@@ -31729,7 +31782,8 @@ private function get_work_order_items_summary_html($work_order_id) {
                 if (!is_array($entry)) {
                     continue;
                 }
-                $attachment_id = absint($entry['id'] ?? 0);
+                $attachment_id = absint($entry['attachment_id'] ?? ($entry['id'] ?? ($entry['media_id'] ?? 0)));
+                $attachment_exists = $attachment_id > 0 && get_post($attachment_id) instanceof WP_Post;
                 $url = $attachment_id ? wp_get_attachment_url($attachment_id) : esc_url_raw($entry['url'] ?? '');
                 $file_path = $attachment_id ? get_attached_file($attachment_id) : '';
                 $filename = sanitize_file_name((string) ($entry['name'] ?? ''));
@@ -31745,7 +31799,13 @@ private function get_work_order_items_summary_html($work_order_id) {
                 if ($uploaded_at === '' && $attachment_id > 0) {
                     $uploaded_at = sanitize_text_field((string) get_post_meta($attachment_id, '_dmx_uploaded_at', true));
                 }
-                $missing = ($attachment_id > 0 && ($file_path === '' || !file_exists($file_path) || !is_readable($file_path))) ? 'yes' : 'no';
+                $missing = (
+                    $attachment_id <= 0
+                    || !$attachment_exists
+                    || $file_path === ''
+                    || !file_exists($file_path)
+                    || !is_readable($file_path)
+                );
                 $files[] = array(
                     'company_key' => $company_key,
                     'parent_post_type' => $parent_post_type,
