@@ -6713,6 +6713,7 @@ class DoorMatrix_Company_Portal {
         $phone = sanitize_text_field(wp_unslash($_POST['dmx_signup_phone'] ?? ''));
         $password = (string) ($_POST['dmx_signup_password'] ?? '');
         $confirm_password = (string) ($_POST['dmx_signup_password_confirm'] ?? '');
+        $requested_plan_raw = sanitize_key(wp_unslash($_POST['dmx_signup_requested_plan'] ?? 'operations'));
 
         if ($company_name === '' || $full_name === '' || $email === '' || $password === '') {
             $this->redirect_to_signup_target('error', 'Company name, full name, email, and password are required.', 'company');
@@ -6750,6 +6751,9 @@ class DoorMatrix_Company_Portal {
         update_user_meta($user_id, '_dmx_account_status', 'pending_email_verification');
         update_user_meta($user_id, '_dmx_requested_role', self::MANAGER_ROLE);
         update_user_meta($user_id, '_dmx_requested_account_type', 'trial');
+        $requested_plan = $this->normalize_company_plan_key($requested_plan_raw === '' ? 'operations' : $requested_plan_raw);
+        update_user_meta($user_id, '_dmx_requested_plan', $requested_plan);
+        update_user_meta($user_id, '_dmx_requested_plan_label', $this->get_company_plan_label($requested_plan));
         update_user_meta($user_id, '_dmx_is_company_owner', 'yes');
         update_user_meta($user_id, '_dmx_needs_company_setup', 'yes');
         update_user_meta($user_id, '_dmx_role_approved_at', '');
@@ -6870,6 +6874,7 @@ class DoorMatrix_Company_Portal {
         $requested_role = sanitize_text_field(wp_unslash($_POST['dmx_signup_requested_role'] ?? self::TECHNICIAN_ROLE));
         $password = (string) ($_POST['dmx_signup_password'] ?? '');
         $confirm_password = (string) ($_POST['dmx_signup_password_confirm'] ?? '');
+        $requested_plan_raw = sanitize_key(wp_unslash($_POST['dmx_signup_requested_plan'] ?? 'operations'));
 
         $allowed_requested_roles = array(self::SALES_ROLE, self::COORDINATOR_ROLE, self::ACCOUNTING_ROLE, self::TECHNICIAN_ROLE, self::WAREHOUSE_ROLE, self::PARTS_ROLE, self::RECEPTIONIST_ROLE, self::SUBCONTRACTOR_ROLE);
         if (!in_array($requested_role, $allowed_requested_roles, true)) {
@@ -7348,6 +7353,22 @@ class DoorMatrix_Company_Portal {
             'enterprise' => 'Enterprise',
         );
     }
+
+    private function get_trial_request_plan_options() {
+        $all = $this->get_company_plan_options();
+        return array(
+            'starter' => $all['starter'] ?? 'Starter / Basic',
+            'operations' => $all['operations'] ?? 'Operations',
+            'full_platform' => 'Full Platform',
+        );
+    }
+
+    private function get_requested_plan_key_for_user($user_id) {
+        $requested = sanitize_key((string) get_user_meta($user_id, '_dmx_requested_plan', true));
+        if ($requested === '') { $requested = 'operations'; }
+        return $this->normalize_company_plan_key($requested);
+    }
+
 
     private function normalize_company_plan_key($plan_key) {
         $plan_key = sanitize_key((string) $plan_key);
@@ -8916,7 +8937,7 @@ class DoorMatrix_Company_Portal {
         $selected_plan = $this->normalize_company_plan_key($_POST['company_plan'] ?? $this->get_company_active_plan($company_key));
         $is_owner_trial_request = ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes' && (string) get_user_meta($user_id, '_dmx_requested_account_type', true) === 'trial');
         if ($is_owner_trial_request) {
-            $selected_plan = 'operations';
+            $selected_plan = $this->get_requested_plan_key_for_user($user_id);
         }
         if ($company_key !== '') {
             $this->set_company_active_plan($company_key, $selected_plan);
@@ -8930,7 +8951,7 @@ class DoorMatrix_Company_Portal {
         update_user_meta($user_id, '_dmx_role_approved_by', get_current_user_id());
 
         if ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes') {
-            $this->maybe_start_company_trial((string) get_user_meta($user_id, '_dmx_company_key', true));
+            $this->set_company_access_status((string) get_user_meta($user_id, '_dmx_company_key', true), 'trial', date('Y-m-d', strtotime('+14 days', current_time('timestamp'))), 'Trial approved by admin.');
             $this->add_audit_log_entry(array(
                 'company_key' => (string) get_user_meta($user_id, '_dmx_company_key', true),
                 'action' => 'company_trial_activated',
@@ -18289,6 +18310,15 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                                     </div>
 
                                     <button type="submit" class="dmx-auth-submit">Request Company Account</button>
+                                    <div class="dmx-field">
+                                        <label>Requested Trial Plan</label>
+                                        <select name="dmx_signup_requested_plan">
+                                            <?php foreach ($this->get_trial_request_plan_options() as $plan_key => $plan_label) : ?>
+                                                <option value="<?php echo esc_attr($plan_key); ?>" <?php selected($plan_key, 'operations'); ?>><?php echo esc_html($plan_label); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+
                                     <p class="dmx-auth-footnote">DoorMatrix admin must approve this account first. Your 14-day free trial with full DoorMatrix access starts after approval. Approval emails come from admin@doormatrix.ca.</p>
                                 </form>
 
@@ -23094,18 +23124,21 @@ private function render_inspections_tab($is_admin = false) {
                                     <?php
                                     $pending_company_key = (string) get_user_meta($pending_user->ID, '_dmx_company_key', true);
                                     $pending_plan = $this->get_company_active_plan($pending_company_key);
+                                    $requested_plan = $this->get_requested_plan_key_for_user($pending_user->ID);
+                                    $is_trial_request = ((string) get_user_meta($pending_user->ID, '_dmx_requested_account_type', true) === 'trial');
                                     ?>
                                     <form method="post" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                         <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
                                         <input type="hidden" name="dmx_portal_action" value="approve_team_member">
                                         <input type="hidden" name="dmx_tab" value="staff">
                                         <input type="hidden" name="team_user_id" value="<?php echo esc_attr($pending_user->ID); ?>">
-                                        <select name="company_plan">
+                                        <?php if (!$is_trial_request) : ?><select name="company_plan">
                                             <?php foreach ($this->get_company_plan_options() as $plan_key => $plan_label) : ?>
                                                 <option value="<?php echo esc_attr($plan_key); ?>" <?php selected($pending_plan, $plan_key); ?>><?php echo esc_html($plan_label); ?></option>
                                             <?php endforeach; ?>
-                                        </select>
-                                        <button type="submit" class="dmx-btn"><?php echo esc_html(((string) get_user_meta($pending_user->ID, '_dmx_requested_account_type', true) === 'trial' && (string) get_user_meta($pending_user->ID, '_dmx_email_verified', true) === 'yes') ? 'Approve Trial Request' : 'Approve'); ?></button>
+                                        </select><?php endif; ?>
+                                        <span style="font-size:12px;color:#475569;">Requested: <?php echo esc_html($this->get_company_plan_label($requested_plan)); ?></span>
+                                        <button type="submit" class="dmx-btn"><?php echo esc_html(($is_trial_request && (string) get_user_meta($pending_user->ID, '_dmx_email_verified', true) === 'yes') ? ('Approve ' . $this->get_company_plan_label($requested_plan) . ' Trial') : 'Approve'); ?></button>
                                     </form>
                                 </td>
                                 <td><?php echo esc_html($this->get_portal_account_status_label((string) get_user_meta($pending_user->ID, '_dmx_account_status', true))); ?></td>
