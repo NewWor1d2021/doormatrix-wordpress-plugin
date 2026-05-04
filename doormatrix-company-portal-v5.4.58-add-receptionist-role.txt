@@ -22029,8 +22029,16 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                     .replace(/'/g, '&#039;');
             }
 
+            function getSafeCurrencyPrefix(prefix) {
+                var raw = String(prefix == null ? '' : prefix).trim();
+                if (!raw || raw.toLowerCase() === 'null' || raw.toLowerCase() === 'undefined') {
+                    return '$';
+                }
+                return raw;
+            }
+
             function displayMoney(val) {
-                return invoiceCurrencyPrefix + money(val);
+                return getSafeCurrencyPrefix(invoiceCurrencyPrefix) + money(val);
             }
 
             function setText(id, value) {
