@@ -6437,6 +6437,27 @@ class DoorMatrix_Company_Portal {
     }
 
     private function current_user_can_view_tab($tab) {
+        $tab_feature_map = array(
+            'overview' => 'dashboard',
+            'messages' => 'messages',
+            'sales' => 'sales_workflow',
+            'sales_scheduler' => 'sales_schedule',
+            'scheduler' => 'technician_schedule',
+            'costs' => 'inventory',
+            'accounting' => 'accounting',
+            'reports' => 'reports',
+            'customers' => 'customers',
+            'staff' => 'team',
+            'subcontractors' => 'subcontractors',
+            'calculators' => 'tools',
+            'inspections' => 'inspections',
+            'settings' => 'settings',
+            'help' => 'help',
+        );
+        if (isset($tab_feature_map[$tab]) && !$this->current_company_plan_allows_feature($tab_feature_map[$tab])) {
+            return false;
+        }
+
         switch ($tab) {
             case 'overview':
             case 'calculators':
@@ -6600,6 +6621,16 @@ class DoorMatrix_Company_Portal {
         $subtab = sanitize_key((string) $subtab);
         if ($subtab === '') {
             return $this->current_user_can_view_sales_workflow();
+        }
+        $subtab_plan_feature_map = array(
+            'quotes' => 'quotes',
+            'invoices' => 'invoices',
+            'payments' => 'invoices',
+            'work_orders' => 'work_orders',
+            'supplier_requests' => 'sales_workflow',
+        );
+        if (isset($subtab_plan_feature_map[$subtab]) && !$this->current_company_plan_allows_feature($subtab_plan_feature_map[$subtab])) {
+            return false;
         }
 
         if ($subtab === 'supplier_requests') {
@@ -7348,9 +7379,8 @@ class DoorMatrix_Company_Portal {
     private function get_company_plan_options() {
         return array(
             'starter' => 'Starter',
-            'growth' => 'Growth',
             'operations' => 'Operations',
-            'enterprise' => 'Enterprise',
+            'full_platform' => 'Full Platform',
         );
     }
 
@@ -7373,14 +7403,15 @@ class DoorMatrix_Company_Portal {
     private function normalize_company_plan_key($plan_key) {
         $plan_key = sanitize_key((string) $plan_key);
 
-        // Legacy compatibility: older installs used the Operations key for the $199 plan.
-        if ($plan_key === 'full_platform') {
+        if ($plan_key === 'growth') {
             $plan_key = 'operations';
+        } elseif ($plan_key === 'enterprise') {
+            $plan_key = 'full_platform';
         }
 
         $allowed = array_keys($this->get_company_plan_options());
         if (!in_array($plan_key, $allowed, true)) {
-            return 'starter';
+            return 'operations';
         }
         return $plan_key;
     }
@@ -7411,26 +7442,15 @@ class DoorMatrix_Company_Portal {
     private function get_company_active_plan($company_key = '') {
         $company_key = $company_key !== '' ? sanitize_title((string) $company_key) : $this->get_current_user_company_key();
         if ($company_key === '') {
-            return current_user_can('manage_options') ? 'enterprise' : 'starter';
+            return current_user_can('manage_options') ? 'full_platform' : 'operations';
         }
 
         $plans = $this->get_company_plans();
         if (empty($plans[$company_key]) || !is_array($plans[$company_key])) {
-            return 'starter';
+            return 'operations';
         }
 
-        return $this->normalize_company_plan_key($plans[$company_key]['plan'] ?? 'starter');
-    }
-
-    private function get_company_effective_plan($company_key = '') {
-        $assigned_plan = $this->get_company_active_plan($company_key);
-        $trial = $this->get_company_trial_data($company_key);
-
-        if ($trial['status'] === 'trial' && empty($trial['expired'])) {
-            return 'enterprise';
-        }
-
-        return $assigned_plan;
+        return $this->normalize_company_plan_key($plans[$company_key]['plan'] ?? 'operations');
     }
 
     private function get_company_plan_label($plan_key) {
@@ -7439,19 +7459,42 @@ class DoorMatrix_Company_Portal {
         return $options[$plan_key] ?? 'Starter';
     }
 
+    private function get_company_plan($company_key = '') {
+        return $this->get_company_active_plan($company_key);
+    }
+
+    private function get_plan_features($plan_key) {
+        $plan_key = $this->normalize_company_plan_key($plan_key);
+        $starter = array('dashboard','messages','customers','quotes','invoices','tools','inspections','settings','help');
+        $operations = array_merge($starter, array('sales_workflow','sales_schedule','technician_schedule','work_orders','inventory','team','reports','startup_setup','equipment_schedule'));
+        $full = array_merge($operations, array('accounting','purchase_orders','subcontractors','advanced_reports','receipts_expenses'));
+        $map = array('starter' => $starter, 'operations' => $operations, 'full_platform' => $full);
+        return $map[$plan_key] ?? $operations;
+    }
+
+    private function company_plan_allows_feature($company_key, $feature_key) {
+        if (current_user_can('manage_options')) { return true; }
+        $feature_key = sanitize_key((string) $feature_key);
+        return in_array($feature_key, $this->get_plan_features($this->get_company_plan($company_key)), true);
+    }
+
+    private function current_company_plan_allows_feature($feature_key) {
+        return $this->company_plan_allows_feature($this->get_current_user_company_key(), $feature_key);
+    }
+
     private function company_has_feature($feature_key, $company_key = '') {
-        if (current_user_can('manage_options')) {
-            return true;
-        }
-
-        $plan_key = $this->get_company_effective_plan($company_key);
-
-        switch ($feature_key) {
-            case 'scheduler':
-                return in_array($plan_key, array('growth', 'operations', 'enterprise'), true);
-            default:
-                return true;
-        }
+        $map = array(
+            'scheduler' => 'technician_schedule',
+            'sales_scheduler' => 'sales_schedule',
+            'inventory' => 'inventory',
+            'accounting' => 'accounting',
+            'reports' => 'reports',
+            'team' => 'team',
+            'subcontractors' => 'subcontractors',
+            'purchase_orders' => 'purchase_orders',
+        );
+        $feature = $map[sanitize_key((string) $feature_key)] ?? sanitize_key((string) $feature_key);
+        return $this->company_plan_allows_feature($company_key, $feature);
     }
 
     private function get_companies_for_plan_management() {
@@ -18057,6 +18100,8 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
     private function render_portal_screen($is_admin = false, $forced_tab = '') {
         $tab = $forced_tab ? $forced_tab : sanitize_key($_GET['dmx_tab'] ?? 'overview');
+        $requested_tab = $tab;
+        $plan_block_message = '';
         $allowed_tabs = array('overview', 'calculators', 'inspections', 'help');
 
         if ($this->current_user_can_view_sales_workflow() || $this->current_user_is_accounting()) {
@@ -18092,7 +18137,11 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         if ($this->current_user_can_view_settings()) {
             $allowed_tabs[] = 'settings';
         }
+        $known_tabs = array('overview','messages','sales','sales_scheduler','scheduler','costs','accounting','reports','customers','staff','subcontractors','calculators','inspections','settings','help');
         if (!in_array($tab, $allowed_tabs, true)) {
+            if (in_array($requested_tab, $known_tabs, true) && !$this->current_user_can_view_tab($requested_tab)) {
+                $plan_block_message = '<div class="dmx-message dmx-message-warning">This feature is not included in your current DoorMatrix plan.</div>';
+            }
             $tab = 'overview';
         }
 
@@ -18118,6 +18167,9 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         $message_text = isset($_GET['dmx_msg']) ? sanitize_text_field(wp_unslash($_GET['dmx_msg'])) : '';
         if ($message_text && in_array($message_type, array('success', 'error'), true)) {
             $message = '<div class="dmx-message dmx-message-' . esc_attr($message_type) . '">' . esc_html($message_text) . '</div>';
+        }
+        if ($plan_block_message !== '') {
+            $message .= $plan_block_message;
         }
         $has_scheduler_access = $this->company_has_feature('scheduler');
         $current_user_role_label = $this->get_portal_role_label($user);
@@ -18829,6 +18881,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         <div class="dmx-dashboard-hub dmx-role-dashboard-hub">
             <div class="dmx-dashboard-sales-grid dmx-role-dashboard-grid">
                 <?php foreach ($cards as $card) : ?>
+                    <?php if (!$this->dashboard_card_allowed_by_plan($card)) { continue; } ?>
                     <?php $tile_class = $this->get_role_dashboard_card_color_class($card); ?>
                     <a class="dmx-dashboard-sales-tile dmx-role-dashboard-tile <?php echo esc_attr($tile_class); ?>" href="<?php echo esc_url($card['url']); ?>">
                         <?php if (!empty($card['badge_count'])) : ?>
@@ -18842,6 +18895,34 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         </div>
         <?php
         return ob_get_clean();
+    }
+
+    private function dashboard_card_allowed_by_plan($card) {
+        $title = strtolower((string) ($card['title'] ?? ''));
+        $title_map = array(
+            'messages' => 'messages',
+            'tools' => 'tools',
+            'inventory' => 'inventory',
+            'purchase orders' => 'purchase_orders',
+            'manage team' => 'team',
+            'team' => 'team',
+            'sales schedule' => 'sales_schedule',
+            'technician schedule' => 'technician_schedule',
+            'equipment scheduler' => 'equipment_schedule',
+            'customers' => 'customers',
+            'quotes' => 'quotes',
+            'invoices' => 'invoices',
+            'work orders' => 'work_orders',
+            'subcontractor' => 'subcontractors',
+            'accounting' => 'accounting',
+            'reports' => 'reports',
+        );
+        foreach ($title_map as $needle => $feature) {
+            if ($title !== '' && strpos($title, $needle) !== false) {
+                return $this->current_company_plan_allows_feature($feature);
+            }
+        }
+        return true;
     }
 
     private function render_role_dashboard_stat_grid($stats) {
