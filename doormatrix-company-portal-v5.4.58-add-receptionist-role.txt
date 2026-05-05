@@ -6491,6 +6491,14 @@ class DoorMatrix_Company_Portal {
         }
     }
 
+    private function can_render_tab_nav_item($tab_key) {
+        $tab_key = sanitize_key((string) $tab_key);
+        if ($tab_key === '') {
+            return false;
+        }
+        return $this->current_user_can_view_tab($tab_key);
+    }
+
     private function current_user_can_create_work_orders() {
         return current_user_can('manage_options') || $this->current_user_is_portal_manager() || $this->current_user_is_coordinator();
     }
@@ -18197,20 +18205,20 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                         </div>
                     </div>
                     <nav class="dmx-app-nav">
-                        <?php echo $this->nav_link('overview', 'Dashboard', $tab, $is_admin, 'app'); ?>
-                        <?php if ($this->current_user_can_view_messages()) : ?><?php echo $this->nav_link('messages', $messages_label, $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_sales_workflow()) : ?><?php echo $this->nav_link('sales', 'Sales Workflow', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_sales_scheduler()) : ?><?php echo $this->nav_link('sales_scheduler', 'Sales Schedule', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_scheduler()) : ?><?php echo $this->nav_link('scheduler', 'Technician Schedule', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php echo $this->nav_link('calculators', 'Tools', $tab, $is_admin, 'app'); ?>
-                        <?php if ($this->current_user_can_view_inventory_and_costs()) : ?><?php echo $this->nav_link('costs', 'Inventory', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_accounting()) : ?><?php echo $this->nav_link('accounting', 'Accounting', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_reports()) : ?><?php echo $this->nav_link('reports', 'Reports', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_customers_tab()) : ?><?php echo $this->nav_link('customers', 'Customers', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->can_view_team_tab()) : ?><?php echo $this->nav_link('staff', 'Team', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_subcontractors()) : ?><?php echo $this->nav_link('subcontractors', 'Subcontractors', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php if ($this->current_user_can_view_settings()) : ?><?php echo $this->nav_link('settings', 'Settings', $tab, $is_admin, 'app'); ?><?php endif; ?>
-                        <?php echo $this->nav_link('help', 'Help', $tab, $is_admin, 'app'); ?>
+                        <?php if ($this->can_render_tab_nav_item('overview')) : ?><?php echo $this->nav_link('overview', 'Dashboard', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('messages')) : ?><?php echo $this->nav_link('messages', $messages_label, $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('sales')) : ?><?php echo $this->nav_link('sales', 'Sales Workflow', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('sales_scheduler')) : ?><?php echo $this->nav_link('sales_scheduler', 'Sales Schedule', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('scheduler')) : ?><?php echo $this->nav_link('scheduler', 'Technician Schedule', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('calculators')) : ?><?php echo $this->nav_link('calculators', 'Tools', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('costs')) : ?><?php echo $this->nav_link('costs', 'Inventory', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('accounting')) : ?><?php echo $this->nav_link('accounting', 'Accounting', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('reports')) : ?><?php echo $this->nav_link('reports', 'Reports', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('customers')) : ?><?php echo $this->nav_link('customers', 'Customers', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('staff')) : ?><?php echo $this->nav_link('staff', 'Team', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('subcontractors')) : ?><?php echo $this->nav_link('subcontractors', 'Subcontractors', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('settings')) : ?><?php echo $this->nav_link('settings', 'Settings', $tab, $is_admin, 'app'); ?><?php endif; ?>
+                        <?php if ($this->can_render_tab_nav_item('help')) : ?><?php echo $this->nav_link('help', 'Help', $tab, $is_admin, 'app'); ?><?php endif; ?>
                     </nav>
                     <?php if ($is_admin) : ?>
                     <div class="dmx-app-sidebar-footer">
@@ -20097,42 +20105,46 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             'overview' => 'Dashboard',
         );
 
-        if ($this->current_user_can_view_messages()) {
+        if ($this->can_render_tab_nav_item('messages')) {
             $message_count = $this->get_unread_message_count();
             $options['messages'] = $message_count > 0 ? sprintf('Messages (%d)', $message_count) : 'Messages';
         }
-        if ($this->current_user_can_view_sales_workflow()) {
+        if ($this->can_render_tab_nav_item('sales')) {
             $options['sales'] = 'Sales Workflow';
         }
-        if ($this->current_user_can_view_sales_scheduler()) {
+        if ($this->can_render_tab_nav_item('sales_scheduler')) {
             $options['sales_scheduler'] = 'Sales Schedule';
         }
-        if ($this->current_user_can_view_scheduler()) {
+        if ($this->can_render_tab_nav_item('scheduler')) {
             $options['scheduler'] = 'Technician Schedule';
         }
-        $options['calculators'] = 'Tools';
-        if ($this->current_user_can_view_inventory_and_costs()) {
+        if ($this->can_render_tab_nav_item('calculators')) {
+            $options['calculators'] = 'Tools';
+        }
+        if ($this->can_render_tab_nav_item('costs')) {
             $options['costs'] = 'Inventory';
         }
-        if ($this->current_user_can_view_accounting()) {
+        if ($this->can_render_tab_nav_item('accounting')) {
             $options['accounting'] = 'Accounting';
         }
-        if ($this->current_user_can_view_reports()) {
+        if ($this->can_render_tab_nav_item('reports')) {
             $options['reports'] = 'Reports';
         }
-        if ($this->current_user_can_view_customers_tab()) {
+        if ($this->can_render_tab_nav_item('customers')) {
             $options['customers'] = 'Customers';
         }
-        if ($this->can_view_team_tab()) {
+        if ($this->can_render_tab_nav_item('staff')) {
             $options['staff'] = 'Team';
         }
-        if ($this->current_user_can_view_subcontractors()) {
+        if ($this->can_render_tab_nav_item('subcontractors')) {
             $options['subcontractors'] = 'Subcontractors';
         }
-        if ($this->current_user_can_view_settings()) {
+        if ($this->can_render_tab_nav_item('settings')) {
             $options['settings'] = 'Settings';
         }
-        $options['help'] = 'Help';
+        if ($this->can_render_tab_nav_item('help')) {
+            $options['help'] = 'Help';
+        }
 
         $company_settings = $this->get_company_profile_settings();
         $mobile_company_name = trim((string) ($company_settings['company_name'] ?? ''));
