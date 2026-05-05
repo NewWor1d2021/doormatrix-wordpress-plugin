@@ -7721,21 +7721,33 @@ class DoorMatrix_Company_Portal {
         }
 
         $company_name = (string) get_user_meta($user_id, '_dmx_signup_company_name', true);
-        $role_label = $this->get_role_label_from_key((string) get_user_meta($user_id, '_dmx_requested_role', true));
-        $trial = $this->get_company_trial_data((string) get_user_meta($user_id, '_dmx_company_key', true));
+        $company_key = (string) get_user_meta($user_id, '_dmx_company_key', true);
+        $trial = $this->get_company_trial_data($company_key);
+        $requested_plan = $this->get_company_plan_label($this->get_requested_plan_key_for_user($user_id));
+        $customer_name = trim((string) $user->display_name);
+        if ($customer_name === '') {
+            $customer_name = trim((string) $user->first_name . ' ' . (string) $user->last_name);
+        }
+        if ($customer_name === '') {
+            $customer_name = (string) $user->user_login;
+        }
 
         $subject = 'Welcome to DoorMatrix — your trial is approved';
-        $requested_plan = $this->get_company_plan_label($this->get_requested_plan_key_for_user($user_id));
-        $body = "Welcome to DoorMatrix.\n\n";
-        $body .= "Company: " . $company_name . "\n";
-        $body .= "Role: " . $role_label . "\n";
-        $body .= "Portal Login: " . trailingslashit(home_url('/portal/')) . "\n";
-        $body .= "Your selected trial plan is approved: " . $requested_plan . "\n";
-        $body .= "You can now complete Start-Up Setup.\n";
+        $trial_end_display = !empty($trial['ends_at']) ? date_i18n(get_option('date_format'), strtotime($trial['ends_at'])) : 'N/A';
+        $portal_url = trailingslashit(home_url('/portal/'));
 
-        if ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes' && $trial['status'] === 'trial' && !empty($trial['ends_at'])) {
-            $body .= "\nYour 14-day trial is active. Trial end date: " . date_i18n(get_option('date_format'), strtotime($trial['ends_at'])) . ".";
-        }
+        $body = "Hi " . $customer_name . ",\n\n";
+        $body .= "Welcome to DoorMatrix — your company trial has been approved.\n\n";
+        $body .= "Company: " . $company_name . "\n";
+        $body .= "Selected plan: " . $requested_plan . "\n";
+        $body .= "Trial length: 14 days\n";
+        $body .= "Trial end date: " . $trial_end_display . "\n\n";
+        $body .= "You can now log in to your DoorMatrix company portal and complete your Start-Up Setup.\n\n";
+        $body .= "Portal login:\n";
+        $body .= $portal_url . "\n\n";
+        $body .= "Your Start-Up Setup will help you add your company profile, tax settings, users, branding, inventory, equipment, and suppliers before fully using the platform.\n\n";
+        $body .= "Welcome aboard,\n";
+        $body .= "DoorMatrix Team";
 
         $this->send_portal_notification_email($user->user_email, $subject, $body);
     }
@@ -16280,47 +16292,47 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             'company_profile' => array(
                 'label' => 'Company Profile',
                 'desc' => 'Business name, email, phone, address, website, and logo are filled in.',
-                'complete' => ($company['company_name'] !== '' && $company['email'] !== ''),
+                'complete' => ($setup['company_profile_ack'] === 'yes'),
             ),
             'geography_timezone' => array(
                 'label' => 'Geography & Time Zone',
                 'desc' => 'Company base location, timezone, currency, distance units, and date/time display are confirmed.',
-                'complete' => (!empty($company['company_timezone']) && !empty($company['country']) && $has_base_location),
+                'complete' => ($setup['geography_ack'] === 'yes'),
             ),
             'tax_accounting' => array(
                 'label' => 'Tax & Invoice Terms',
                 'desc' => 'Tax setup, invoice due days, and customer-facing invoice terms are confirmed.',
-                'complete' => ($has_tax_ready || $setup['tax_accounting_ack'] === 'yes'),
+                'complete' => ($setup['tax_accounting_ack'] === 'yes'),
             ),
             'team_roles' => array(
                 'label' => 'Users & Roles',
                 'desc' => 'Managers, coordinators, sales, technicians, helpers, warehouse, parts, accounting, and subcontractor access are reviewed.',
-                'complete' => (($team_count > 0 || current_user_can('manage_options')) && ($setup['team_roles_ack'] === 'yes' || $team_count > 0)),
+                'complete' => ($setup['team_roles_ack'] === 'yes'),
             ),
             'payroll_rules' => array(
                 'label' => 'Time Card Rules',
                 'desc' => 'Time card approval, overtime trigger, and break-time defaults are reviewed. Employee wages are set later on each team member profile.',
-                'complete' => ((float) $setup['overtime_after_hours'] > 0 && ($setup['payroll_ack'] === 'yes' || trim((string) $setup['overtime_after_hours']) !== '')),
+                'complete' => ($setup['payroll_ack'] === 'yes'),
             ),
             'sales_commissions' => array(
                 'label' => 'Sales Commission Rules',
                 'desc' => 'Commission tracking is reviewed. Individual commission percentages are set later when sales team members are added or edited.',
-                'complete' => ($setup['commissions_ack'] === 'yes' || in_array($setup['commission_tracking_enabled'], array('yes', 'no'), true)),
+                'complete' => ($setup['commissions_ack'] === 'yes'),
             ),
             'branding_documents' => array(
                 'label' => 'Branding & Customer Documents',
                 'desc' => 'Quote, invoice, logo, colors, terms, and customer-facing document settings are reviewed.',
-                'complete' => ($setup['documents_ack'] === 'yes' || ($company['document_accent_color'] !== '' && $company['document_header_color'] !== '')),
+                'complete' => ($setup['documents_ack'] === 'yes'),
             ),
             'numbering' => array(
                 'label' => 'Customer / Job Numbering',
                 'desc' => 'Quote, invoice, work order, and customer prefixes are set.',
-                'complete' => ($setup['quote_prefix'] !== '' && $setup['invoice_prefix'] !== '' && $setup['work_order_prefix'] !== ''),
+                'complete' => ($setup['numbering_ack'] === 'yes'),
             ),
             'inventory_trucks' => array(
                 'label' => 'Inventory, Warehouse & Trucks',
                 'desc' => 'Warehouse, truck inventory, technician truck assignment, transfers, receiving, and low-stock workflow are reviewed.',
-                'complete' => (trim((string) $setup['main_warehouse_name']) !== ''),
+                'complete' => ($setup['inventory_ack'] === 'yes'),
             ),
             'equipment_scheduler' => array(
                 'label' => 'Equipment Scheduler',
@@ -16330,7 +16342,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
             'suppliers' => array(
                 'label' => 'Suppliers & Vendor Contacts',
                 'desc' => 'Supplier contacts and quote request routing are reviewed.',
-                'complete' => ($setup['suppliers_ack'] === 'yes' || !empty($setup['supplier_contacts']) || trim((string) $setup['supplier_notes']) !== ''),
+                'complete' => ($setup['suppliers_ack'] === 'yes'),
             ),
         );
 
