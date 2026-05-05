@@ -32906,6 +32906,58 @@ private function get_work_order_items_summary_html($work_order_id) {
         return 'dmx_data_import_state_' . $company_key;
     }
 
+    private function normalize_import_header($value) {
+        $value = strtolower(trim((string) $value));
+        $value = str_replace(array('_', '-'), ' ', $value);
+        $value = preg_replace('/[^a-z0-9\s]/', '', $value);
+        $value = preg_replace('/\s+/', ' ', (string) $value);
+        return trim((string) $value);
+    }
+
+    private function get_data_import_default_mapping_synonyms() {
+        return array(
+            'customer_company_name' => array('Customer Name','Company Name','Customer','Business Name','Client Name','Name'),
+            'first_name' => array('First Name','First','Contact First Name'),
+            'last_name' => array('Last Name','Last','Contact Last Name'),
+            'email' => array('Email','Email Address','Customer Email','Contact Email'),
+            'phone' => array('Phone','Phone Number','Main Phone','Customer Phone'),
+            'mobile' => array('Mobile','Cell','Cell Phone','Mobile Phone'),
+            'billing_address' => array('Billing Address','Address','Street Address','Customer Address'),
+            'city' => array('City','Billing City'),
+            'province_state' => array('Province','State','Province State','Billing Province','Billing State'),
+            'postal_zip' => array('Postal Code','Zip','Zip Code','Postal Zip','Billing Postal Code'),
+            'country' => array('Country'),
+            'customer_notes' => array('Notes','Customer Notes','Comments'),
+            'customer_number' => array('Customer Number','Customer ID','Client Number','Legacy Customer Number'),
+            'service_site_name' => array('Service Site Name','Site Name','Location Name','Job Site Name'),
+            'service_site_address' => array('Service Site Address','Site Address','Job Site Address','Service Address'),
+            'site_city' => array('Site City','Service City','Job Site City'),
+            'site_province_state' => array('Site Province','Site State','Service Province','Service State'),
+            'site_postal_zip' => array('Site Postal Code','Site Zip','Service Postal Code','Service Zip'),
+            'site_notes' => array('Site Notes','Service Site Notes','Location Notes'),
+        );
+    }
+
+    private function build_data_import_auto_map($headers) {
+        $auto_map = array();
+        $header_lookup = array();
+        foreach ((array) $headers as $header) {
+            $header = sanitize_text_field((string) $header);
+            if ($header === '') { continue; }
+            $header_lookup[$header] = $header;
+            $header_lookup[$this->normalize_import_header($header)] = $header;
+        }
+        foreach ($this->get_data_import_default_mapping_synonyms() as $field => $synonyms) {
+            foreach ((array) $synonyms as $candidate) {
+                $candidate = sanitize_text_field((string) $candidate);
+                if (isset($header_lookup[$candidate])) { $auto_map[$field] = $header_lookup[$candidate]; break; }
+                $normalized = $this->normalize_import_header($candidate);
+                if ($normalized !== '' && isset($header_lookup[$normalized])) { $auto_map[$field] = $header_lookup[$normalized]; break; }
+            }
+        }
+        return $auto_map;
+    }
+
     private function render_settings_data_import_page() {
         if (!$this->current_user_can_import_customer_data()) { return '<div class="dmx-message dmx-message-error">Only company managers can run customer imports.</div>'; }
         $company_key = sanitize_key((string) $this->get_current_user_company_key());
@@ -32915,11 +32967,13 @@ private function get_work_order_items_summary_html($work_order_id) {
         echo '<form method="post" enctype="multipart/form-data">'; wp_nonce_field('dmx_portal_submit','dmx_nonce');
         echo '<input type="hidden" name="dmx_portal_action" value="data_import_upload_csv"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
         echo '<div class="dmx-field"><label>Step 1 — Upload CSV</label><input type="file" name="dmx_customer_csv" accept=".csv,text/csv" required></div><button class="dmx-btn" type="submit">Upload & Preview</button></form>';
-        if (!empty($state['headers'])) { echo '<h4>Step 2/3 — Preview & Mapping</h4><p>Total rows: '.esc_html((string)($state['row_count']??0)).'</p><form method="post">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_run_dry_run"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
+        if (!empty($state['headers'])) { echo '<h4>Step 2/3 — Preview & Mapping</h4><p>DoorMatrix auto-mapped matching columns. Review before running dry run.</p><p>Total rows: '.esc_html((string)($state['row_count']??0)).'</p><form method="post">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_run_dry_run"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
             $fields=array('customer_company_name','first_name','last_name','email','phone','mobile','billing_address','city','province_state','postal_zip','country','customer_notes','customer_number','service_site_name','service_site_address','site_city','site_province_state','site_postal_zip','site_notes');
-            foreach($fields as $f){ echo '<div class="dmx-field"><label>'.esc_html(str_replace('_',' ',ucwords($f,'_'))).'</label><select name="dmx_import_map['.esc_attr($f).']"><option value="">-- Not mapped --</option>'; foreach((array)$state['headers'] as $h){ echo '<option value="'.esc_attr($h).'">'.esc_html($h).'</option>'; } echo '</select></div>'; }
+            $current_map = isset($state['map']) && is_array($state['map']) ? $state['map'] : array();
+            foreach($fields as $f){ echo '<div class="dmx-field"><label>'.esc_html(str_replace('_',' ',ucwords($f,'_'))).'</label><select name="dmx_import_map['.esc_attr($f).']"><option value="">-- Not mapped --</option>'; foreach((array)$state['headers'] as $h){ echo '<option value="'.esc_attr($h).'" '.selected((string)($current_map[$f] ?? ''),(string)$h,false).'>'.esc_html($h).'</option>'; } echo '</select></div>'; }
+            if (empty($current_map['customer_company_name']) && (empty($current_map['first_name']) || empty($current_map['last_name'])) && empty($current_map['email']) && empty($current_map['phone'])) { echo '<div class="dmx-message dmx-message-error">Map at least Customer Name, First/Last Name, Email, or Phone before dry run.</div>'; }
             echo '<button class="dmx-btn" type="submit">Run Dry Run</button></form>'; }
-        if (!empty($state['dry_run'])) { $d=$state['dry_run']; echo '<h4>Step 4 — Dry Run</h4><ul><li>Ready: '.esc_html((string)$d['ready']).'</li><li>Skipped: '.esc_html((string)$d['skipped']).'</li><li>Duplicates: '.esc_html((string)$d['duplicates']).'</li><li>Errors: '.esc_html((string)$d['errors']).'</li></ul>'; echo '<form method="post">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_confirm_import"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import"><button class="dmx-btn" type="submit">Confirm Import</button></form>'; }
+        if (!empty($state['dry_run'])) { $d=$state['dry_run']; echo '<h4>Step 4 — Dry Run</h4><ul><li>Ready: '.esc_html((string)$d['ready']).'</li><li>Skipped: '.esc_html((string)$d['skipped']).'</li><li>Duplicates: '.esc_html((string)$d['duplicates']).'</li><li>Errors: '.esc_html((string)$d['errors']).'</li></ul>'; if (!empty($d['issues'])) { echo '<p><strong>Row issue summary (first 10):</strong></p><ul>'; foreach ((array) $d['issues'] as $issue) { echo '<li>'.esc_html((string) $issue).'</li>'; } echo '</ul>'; } if ((int) ($d['ready'] ?? 0) > 0) { echo '<form method="post">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_confirm_import"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import"><button class="dmx-btn" type="submit">Confirm Import</button></form>'; } else { echo '<div class="dmx-message dmx-message-error">No rows are ready to import. Review your column mapping and run dry run again.</div>'; } }
         if (!empty($state['summary'])) { $sum=$state['summary']; echo '<h4>Step 6 — Import Summary</h4><ul><li>Created: '.esc_html((string)$sum['created']).'</li><li>Skipped: '.esc_html((string)$sum['skipped']).'</li><li>Duplicates skipped: '.esc_html((string)$sum['duplicates']).'</li><li>Errors: '.esc_html((string)$sum['errors']).'</li><li>Batch ID: '.esc_html((string)$sum['batch_id']).'</li></ul>'; }
         echo '</div>'; return ob_get_clean();
     }
@@ -32929,26 +32983,28 @@ private function get_work_order_items_summary_html($work_order_id) {
         $file=$_FILES['dmx_customer_csv']; $name=sanitize_file_name((string)$file['name']); if (strtolower(pathinfo($name,PATHINFO_EXTENSION))!=='csv') { $this->redirect_with_message($tab,'error','Only CSV files are supported.'); }
         if ((int)$file['size']<=0 || (int)$file['size']>5*1024*1024) { $this->redirect_with_message($tab,'error','CSV file size must be under 5MB.'); }
         $rows=array_map('str_getcsv', file($file['tmp_name'])); $headers=array(); if(!empty($rows)){ $headers=array_map('sanitize_text_field', (array)array_shift($rows)); }
-        update_option($this->get_data_import_state_option_key($company_key), array('headers'=>$headers,'rows'=>$rows,'row_count'=>count($rows)));
+        $auto_map = $this->build_data_import_auto_map($headers);
+        update_option($this->get_data_import_state_option_key($company_key), array('headers'=>$headers,'rows'=>$rows,'row_count'=>count($rows),'map'=>$auto_map));
         $this->redirect_with_message('settings','success','CSV uploaded and preview ready.'); }
 
     private function handle_data_import_run_dry_run($tab='settings') {
         $company_key = sanitize_key((string) $this->get_current_user_company_key());
         $state = get_option($this->get_data_import_state_option_key($company_key), array());
         $map = isset($_POST['dmx_import_map']) && is_array($_POST['dmx_import_map']) ? array_map('sanitize_text_field', wp_unslash($_POST['dmx_import_map'])) : array();
-        $dry = array('ready'=>0,'skipped'=>0,'duplicates'=>0,'errors'=>0,'rows'=>array());
+        $dry = array('ready'=>0,'skipped'=>0,'duplicates'=>0,'errors'=>0,'rows'=>array(),'issues'=>array());
         $seen = array();
         $rows = isset($state['rows']) && is_array($state['rows']) ? $state['rows'] : array();
         $headers = isset($state['headers']) && is_array($state['headers']) ? $state['headers'] : array();
-        foreach ($rows as $r) { $assoc = array(); foreach ($headers as $i => $h) { $assoc[$h] = sanitize_text_field((string) (isset($r[$i]) ? $r[$i] : '')); }
+        foreach ($rows as $index => $r) { $assoc = array(); foreach ($headers as $i => $h) { $assoc[$h] = sanitize_text_field((string) (isset($r[$i]) ? $r[$i] : '')); }
             $email = (!empty($map['email']) && isset($assoc[$map['email']])) ? $assoc[$map['email']] : '';
             $phone = (!empty($map['phone']) && isset($assoc[$map['phone']])) ? $assoc[$map['phone']] : '';
             $company = (!empty($map['customer_company_name']) && isset($assoc[$map['customer_company_name']])) ? $assoc[$map['customer_company_name']] : '';
             $first = (!empty($map['first_name']) && isset($assoc[$map['first_name']])) ? $assoc[$map['first_name']] : '';
             $last = (!empty($map['last_name']) && isset($assoc[$map['last_name']])) ? $assoc[$map['last_name']] : '';
-            if ($company === '' && trim($first . ' ' . $last) === '' && $email === '' && $phone === '') { $dry['skipped']++; $dry['errors']++; continue; }
+            $row_number = $index + 2;
+            if ($company === '' && trim($first . ' ' . $last) === '' && $email === '' && $phone === '') { $dry['skipped']++; $dry['errors']++; if (count($dry['issues']) < 10) { $dry['issues'][] = 'Row ' . $row_number . ' skipped: no customer name, first/last name, email, or phone mapped.'; } continue; }
             $dup_key = strtolower($email . '|' . $phone . '|' . $company);
-            if ($dup_key !== '||' && isset($seen[$dup_key])) { $dry['duplicates']++; $dry['skipped']++; continue; }
+            if ($dup_key !== '||' && isset($seen[$dup_key])) { $dry['duplicates']++; $dry['skipped']++; if (count($dry['issues']) < 10) { $dry['issues'][] = 'Row ' . $row_number . ' skipped: duplicate email/phone/company in CSV.'; } continue; }
             $seen[$dup_key] = 1; $dry['ready']++; $dry['rows'][] = $assoc;
         }
         $state['map'] = $map; $state['dry_run'] = $dry; update_option($this->get_data_import_state_option_key($company_key), $state);
@@ -32959,7 +33015,7 @@ private function get_work_order_items_summary_html($work_order_id) {
     private function handle_data_import_confirm_import($tab='settings') {
         $company_key = sanitize_key((string) $this->get_current_user_company_key());
         $state = get_option($this->get_data_import_state_option_key($company_key), array());
-        if (empty($state['dry_run']['rows'])) { $this->redirect_with_message($tab,'error','Run dry run first.'); }
+        if (empty($state['dry_run']['rows']) || (int) ($state['dry_run']['ready'] ?? 0) < 1) { $this->redirect_with_message($tab,'error','No rows are ready to import. Run dry run again after fixing mapping.'); }
         $batch_id = 'dmximp_' . gmdate('YmdHis') . '_' . wp_generate_password(6,false,false);
         $created=0; $skipped=0; $duplicates=0; $errors=0; $map = isset($state['map']) && is_array($state['map']) ? $state['map'] : array();
         foreach ((array) $state['dry_run']['rows'] as $assoc) {
