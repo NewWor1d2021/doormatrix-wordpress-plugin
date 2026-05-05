@@ -16228,17 +16228,24 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         );
     }
 
-    private function get_startup_setup_option_key() {
-        $company_key = (string) $this->get_current_user_company_key();
-        $company_key = sanitize_key($company_key);
+    private function get_startup_setup_company_key() {
+        return sanitize_key((string) $this->get_current_user_company_key());
+    }
+
+    private function get_startup_setup_option_key($company_key = '') {
+        $company_key = $company_key !== '' ? sanitize_key((string) $company_key) : $this->get_startup_setup_company_key();
         if ($company_key === '') {
-            $company_key = 'default';
+            return '';
         }
         return 'dmx_startup_setup_settings_' . $company_key;
     }
 
     private function get_startup_setup_settings() {
-        $settings = get_option($this->get_startup_setup_option_key(), array());
+        $option_key = $this->get_startup_setup_option_key();
+        if ($option_key === '') {
+            return $this->get_startup_setup_defaults();
+        }
+        $settings = get_option($option_key, array());
         if (!is_array($settings)) {
             $settings = array();
         }
@@ -16246,7 +16253,11 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
     }
 
     private function update_startup_setup_settings($settings) {
-        update_option($this->get_startup_setup_option_key(), wp_parse_args($settings, $this->get_startup_setup_defaults()));
+        $option_key = $this->get_startup_setup_option_key();
+        if ($option_key === '') {
+            return;
+        }
+        update_option($option_key, wp_parse_args($settings, $this->get_startup_setup_defaults()));
     }
 
     private function yes_no_from_post($key) {
@@ -16355,7 +16366,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         }
         $url = $this->get_dashboard_url($is_admin, array('dmx_tab' => 'settings', 'dmx_subtab' => 'settings_startup'));
         $html = '<div class="dmx-message dmx-message-error dmx-startup-banner" style="display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap;">';
-        $html .= '<span><strong>Start-Up Setup is not complete.</strong> ' . esc_html($progress['complete']) . ' of ' . esc_html($progress['total']) . ' required setup steps are complete. Finish this before fully using time cards, quotes, invoices, scheduling, inventory, and equipment scheduling.</span>';
+        $html .= '<span><strong>Start-Up Setup is not complete.</strong> Complete your company profile, tax settings, users, branding, inventory, equipment, and supplier setup before fully using DoorMatrix. ' . esc_html($progress['complete']) . ' of ' . esc_html($progress['total']) . ' required setup steps are complete.</span>';
         $html .= '<a class="dmx-btn" href="' . esc_url($url) . '">Open Start-Up Setup</a>';
         $html .= '</div>';
         return $html;
@@ -18614,11 +18625,6 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
 
     private function render_overview_tab($is_admin = false) {
         ob_start();
-        if (!$this->is_company_setup_complete()) :
-            $company_setup_url = $is_admin ? admin_url('admin.php?page=' . self::MENU_SLUG . '-settings') : add_query_arg(array('dmx_tab' => 'settings', 'dmx_subtab' => 'settings_company'), $this->get_portal_page_url());
-            echo '<div class="dmx-message dmx-message-error">Company setup is not finished yet. Add the door company business details and default tax settings before sending customer-facing quotes or invoices. <a href="' . esc_url($company_setup_url) . '">Open Company Setup</a></div>';
-        endif;
-
         if ($this->current_user_can_view_settings()) {
             echo $this->render_startup_setup_status_banner($is_admin);
         }
