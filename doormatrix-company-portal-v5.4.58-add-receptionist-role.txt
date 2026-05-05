@@ -8401,6 +8401,9 @@ class DoorMatrix_Company_Portal {
             case 'admin_restore_company_backup_snapshot':
                 $this->admin_restore_company_backup_snapshot();
                 break;
+            case 'repair_legacy_attachment_ownership':
+                $this->handle_legacy_attachment_ownership_repair($tab);
+                break;
             case 'approve_team_member':
                 $this->approve_team_member($tab);
                 break;
@@ -32705,6 +32708,171 @@ private function get_work_order_items_summary_html($work_order_id) {
         return ob_get_clean();
     }
 
+
+    private function run_legacy_attachment_ownership_repair_scan($apply = false) {
+        $report = array(
+            'total_parents_scanned' => 0,
+            'total_attachment_rows_scanned' => 0,
+            'would_repair' => 0,
+            'repaired' => 0,
+            'skipped_parent_missing_company_key' => 0,
+            'skipped_missing_attachment_id' => 0,
+            'skipped_attachment_missing' => 0,
+            'skipped_already_stamped' => 0,
+            'skipped_mismatched_company_key' => 0,
+            'skipped_ambiguous_url_fallback' => 0,
+            'skipped_unresolved_url_fallback' => 0,
+            'errors' => 0,
+        );
+
+        $query = new WP_Query(array(
+            'post_type' => 'any',
+            'post_status' => 'any',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'meta_query' => array(
+                'relation' => 'OR',
+                array('key' => '_dmx_quote_documents', 'compare' => 'EXISTS'),
+                array('key' => '_dmx_document_photos', 'compare' => 'EXISTS'),
+            ),
+            'no_found_rows' => true,
+            'cache_results' => false,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
+        ));
+
+        $parent_ids = is_array($query->posts) ? $query->posts : array();
+
+        foreach ($parent_ids as $parent_id) {
+            $parent_post = get_post($parent_id);
+            if (!$parent_post instanceof WP_Post) {
+                $report['errors']++;
+                continue;
+            }
+
+            $report['total_parents_scanned']++;
+            $parent_company_key = sanitize_key((string) get_post_meta($parent_id, '_dmx_company_key', true));
+            if ($parent_company_key === '') {
+                $report['skipped_parent_missing_company_key']++;
+                continue;
+            }
+
+            foreach (array('_dmx_quote_documents', '_dmx_document_photos') as $meta_key) {
+                $rows = get_post_meta($parent_id, $meta_key, true);
+                if (!is_array($rows)) {
+                    continue;
+                }
+
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+
+                    $report['total_attachment_rows_scanned']++;
+                    $attachment_id = 0;
+                    foreach (array('attachment_id', 'id', 'media_id') as $id_key) {
+                        if (!empty($row[$id_key])) {
+                            $attachment_id = (int) $row[$id_key];
+                            if ($attachment_id > 0) {
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($attachment_id <= 0) {
+                        $url_candidates = array('url', 'file_url', 'attachment_url', 'document_url', 'photo_url');
+                        $resolved = array();
+                        foreach ($url_candidates as $url_key) {
+                            $raw_url = isset($row[$url_key]) ? trim((string) $row[$url_key]) : '';
+                            if ($raw_url === '') { continue; }
+                            $found_id = attachment_url_to_postid($raw_url);
+                            if ($found_id > 0) { $resolved[$found_id] = true; }
+                        }
+
+                        if (count($resolved) > 1) {
+                            $report['skipped_ambiguous_url_fallback']++;
+                            continue;
+                        }
+                        if (count($resolved) === 1) {
+                            $attachment_id = (int) array_key_first($resolved);
+                        } else {
+                            $report['skipped_missing_attachment_id']++;
+                            $report['skipped_unresolved_url_fallback']++;
+                            continue;
+                        }
+                    }
+
+                    $attachment = get_post($attachment_id);
+                    if (!$attachment instanceof WP_Post || $attachment->post_type !== 'attachment') {
+                        $report['skipped_attachment_missing']++;
+                        continue;
+                    }
+
+                    $existing_company_key = sanitize_key((string) get_post_meta($attachment_id, '_dmx_company_key', true));
+                    if ($existing_company_key !== '') {
+                        if ($existing_company_key === $parent_company_key) {
+                            $report['skipped_already_stamped']++;
+                        } else {
+                            $report['skipped_mismatched_company_key']++;
+                        }
+                        continue;
+                    }
+
+                    $report['would_repair']++;
+                    if ($apply) {
+                        update_post_meta($attachment_id, '_dmx_company_key', $parent_company_key);
+                        update_post_meta($attachment_id, '_dmx_parent_post_id', (int) $parent_id);
+                        update_post_meta($attachment_id, '_dmx_parent_post_type', sanitize_key((string) $parent_post->post_type));
+
+                        $uploaded_by = isset($row['uploaded_by']) ? (int) $row['uploaded_by'] : 0;
+                        if ($uploaded_by <= 0 && isset($row['user_id'])) {
+                            $uploaded_by = (int) $row['user_id'];
+                        }
+                        if ($uploaded_by > 0 && '' === (string) get_post_meta($attachment_id, '_dmx_uploaded_by', true)) {
+                            update_post_meta($attachment_id, '_dmx_uploaded_by', $uploaded_by);
+                        }
+
+                        $uploaded_at = isset($row['uploaded_at']) ? sanitize_text_field((string) $row['uploaded_at']) : '';
+                        if ($uploaded_at === '' && isset($row['created_at'])) {
+                            $uploaded_at = sanitize_text_field((string) $row['created_at']);
+                        }
+                        if ($uploaded_at !== '' && '' === (string) get_post_meta($attachment_id, '_dmx_uploaded_at', true)) {
+                            update_post_meta($attachment_id, '_dmx_uploaded_at', $uploaded_at);
+                        }
+
+                        $report['repaired']++;
+                    }
+                }
+            }
+        }
+
+        return $report;
+    }
+
+    private function handle_legacy_attachment_ownership_repair($tab = 'settings') {
+        if (!current_user_can('manage_options')) {
+            $this->redirect_with_message($tab, 'error', 'You do not have permission to run legacy attachment ownership repair.');
+        }
+
+        $apply = !empty($_POST['dmx_repair_apply']) && $_POST['dmx_repair_apply'] === 'yes';
+        $report = $this->run_legacy_attachment_ownership_repair_scan($apply);
+        update_option('dmx_legacy_attachment_repair_last_report', array(
+            'mode' => $apply ? 'apply' : 'dry_run',
+            'run_at' => current_time('mysql'),
+            'report' => $report,
+        ));
+
+        $this->add_audit_log_entry(array(
+            'company_key' => 'platform-admin',
+            'action' => $apply ? 'attachment_repair_apply' : 'attachment_repair_dry_run',
+            'object_type' => 'system',
+            'object_id' => 'legacy_attachment_repair',
+            'after_summary' => wp_json_encode($report),
+        ));
+
+        $this->redirect_with_message('settings', 'success', $apply ? 'Legacy attachment ownership repair completed.' : 'Legacy attachment ownership dry run completed.');
+    }
+
     private function render_settings_backup_page() {
         if (!$this->current_user_can_view_settings()) {
             return '<div class="dmx-message dmx-message-error">Only company managers can view Backup &amp; Recovery.</div>';
@@ -32754,6 +32922,46 @@ private function get_work_order_items_summary_html($work_order_id) {
 
         echo $this->render_recovery_bin_table();
         echo $this->render_audit_log_panel();
+
+        $last_repair = get_option('dmx_legacy_attachment_repair_last_report', array());
+        $last_report = isset($last_repair['report']) && is_array($last_repair['report']) ? $last_repair['report'] : array();
+        $last_mode = isset($last_repair['mode']) ? sanitize_key((string) $last_repair['mode']) : '';
+        $last_run_at = isset($last_repair['run_at']) ? sanitize_text_field((string) $last_repair['run_at']) : '';
+
+        echo '<div class="dmx-form-card" style="margin-top:18px;">';
+        echo '<h4 class="dmx-panel-title">Legacy Attachment Ownership Repair</h4>';
+        echo '<p>Repairs legacy attachment ownership metadata for old quote/document attachment rows when the parent record has a valid company key. Dry run is the default and makes no changes.</p>';
+        echo '<form method="post" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">';
+        wp_nonce_field('dmx_portal_submit', 'dmx_nonce');
+        echo '<input type="hidden" name="dmx_portal_action" value="repair_legacy_attachment_ownership">';
+        echo '<input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_backup">';
+        echo '<button class="dmx-btn dmx-btn-secondary" type="submit" name="dmx_repair_apply" value="no">Dry Run</button>';
+        echo '<button class="dmx-btn" type="submit" name="dmx_repair_apply" value="yes">Apply Repair</button>';
+        echo '</form>';
+
+        if (!empty($last_report)) {
+            echo '<div class="dmx-inline-note" style="margin-top:12px;"><strong>Last run:</strong> ' . esc_html($last_run_at !== '' ? $last_run_at : 'n/a') . ' (' . esc_html($last_mode === 'apply' ? 'Apply' : 'Dry Run') . ')</div>';
+            echo '<ul style="margin:10px 0 0 18px;">';
+            foreach (array(
+                'total_parents_scanned' => 'Total parents scanned',
+                'total_attachment_rows_scanned' => 'Total attachment rows scanned',
+                'would_repair' => 'Would repair',
+                'repaired' => 'Repaired',
+                'skipped_parent_missing_company_key' => 'Skipped parent missing company key',
+                'skipped_missing_attachment_id' => 'Skipped missing attachment ID',
+                'skipped_attachment_missing' => 'Skipped attachment missing',
+                'skipped_already_stamped' => 'Skipped already stamped',
+                'skipped_mismatched_company_key' => 'Skipped mismatched company key',
+                'skipped_ambiguous_url_fallback' => 'Skipped ambiguous URL fallback',
+                'skipped_unresolved_url_fallback' => 'Skipped unresolved URL fallback',
+                'errors' => 'Errors',
+            ) as $counter_key => $counter_label) {
+                echo '<li><strong>' . esc_html($counter_label) . ':</strong> ' . esc_html((string) ((int) ($last_report[$counter_key] ?? 0))) . '</li>';
+            }
+            echo '</ul>';
+        }
+
+        echo '</div>';
 
         echo '<div class="dmx-form-card" style="margin-top:18px;">';
         echo '<h4 class="dmx-panel-title">Request Record Restore or Full Restore Review</h4>';
