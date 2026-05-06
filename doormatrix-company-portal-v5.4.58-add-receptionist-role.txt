@@ -23108,8 +23108,16 @@ private function render_inspections_tab($is_admin = false) {
         $customers = $this->get_posts_for_user('dm_customer', 50);
         $can_add_customer = $this->current_user_can_add_customers();
         $can_manage_customer = $this->current_user_can_manage_customers();
+        $can_view_quotes = $this->current_user_can_view_sales_subtab('quotes');
+        $can_view_invoices = $this->current_user_can_view_sales_subtab('invoices');
+        $can_create_work_orders = $this->current_user_can_create_work_orders();
         $edit_customer_id = $can_manage_customer ? absint($_GET['dmx_edit_customer'] ?? 0) : 0;
         $edit_customer = ($edit_customer_id > 0 && get_post_type($edit_customer_id) === 'dm_customer' && $this->post_matches_current_company($edit_customer_id)) ? get_post($edit_customer_id) : null;
+        $view_customer_id = absint($_GET['dmx_view_customer'] ?? 0);
+        $view_customer = null;
+        if ($view_customer_id > 0 && get_post_type($view_customer_id) === 'dm_customer' && $this->post_matches_current_company($view_customer_id)) {
+            $view_customer = get_post($view_customer_id);
+        }
         $base_url = $this->get_dashboard_url($is_admin, array('dmx_tab' => 'customers'));
         ob_start(); ?>
         <div class="dmx-page-head">
@@ -23134,33 +23142,39 @@ private function render_inspections_tab($is_admin = false) {
             </div>
         <?php endif; ?>
 
-        <div class="dmx-table-wrap">
+        <?php if ($view_customer_id > 0 && !$view_customer) : ?>
+            <div class="dmx-message dmx-message-error" style="margin-bottom:12px;">That customer could not be opened for your company account.</div>
+        <?php endif; ?>
+
+        <?php if ($view_customer) : ?>
+            <?php echo $this->render_customer_detail_view($view_customer, $base_url, $can_manage_customer, $can_view_quotes, $can_view_invoices, $can_create_work_orders); ?>
+        <?php else : ?>
+        <div class="dmx-table-wrap dmx-customers-table-wrap">
             <table class="dmx-table">
                 <thead>
                     <tr>
                         <th>Customer #</th>
-                        <th>Name</th>
-                        <th>Company</th>
-                        <th>Email</th>
+                        <th>Customer / Company</th>
+                        <th>Contact</th>
                         <th>Phone</th>
-                        <th>Address</th>
-                        <th>Date Added</th>
-                        <?php if ($can_manage_customer) : ?><th>Action</th><?php endif; ?>
+                        <th>Email</th>
+                        <th>City</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($customers): foreach ($customers as $customer): ?>
                         <tr>
                             <td><?php echo esc_html($this->ensure_customer_number($customer->ID)); ?></td>
-                            <td><?php echo esc_html($customer->post_title); ?></td>
-                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_company_name', true)); ?></td>
-                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_email', true)); ?></td>
+                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_company_name', true) ?: $customer->post_title); ?></td>
+                            <td><?php echo esc_html(trim((string) get_post_meta($customer->ID, '_dmx_customer_contact_name', true)) ?: $customer->post_title); ?></td>
                             <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_phone', true)); ?></td>
-                            <td><?php echo esc_html($this->get_customer_address_summary($customer->ID)); ?></td>
-                            <td><?php echo esc_html(get_the_date('', $customer)); ?></td>
-                            <?php if ($can_manage_customer) : ?>
-                                <td>
-                                    <div class="dmx-action-row" style="gap:6px;">
+                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_email', true)); ?></td>
+                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_city', true)); ?></td>
+                            <td>
+                                <div class="dmx-action-row" style="gap:6px;">
+                                        <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(add_query_arg(array('dmx_view_customer' => $customer->ID), $base_url)); ?>">View</a>
+                                    <?php if ($can_manage_customer) : ?>
                                         <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(add_query_arg(array('dmx_edit_customer' => $customer->ID), $base_url)); ?>#dmx-edit-customer">Edit</a>
                                         <form method="post" onsubmit="return confirm('Move this customer to trash?');" style="display:inline-flex;margin:0;">
                                             <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
@@ -23169,16 +23183,17 @@ private function render_inspections_tab($is_admin = false) {
                                             <input type="hidden" name="customer_id" value="<?php echo esc_attr($customer->ID); ?>">
                                             <button type="submit" class="dmx-btn dmx-btn-secondary">Delete</button>
                                         </form>
-                                    </div>
-                                </td>
-                            <?php endif; ?>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
                         </tr>
                     <?php endforeach; else: ?>
-                        <tr><td colspan="<?php echo $can_manage_customer ? '8' : '7'; ?>"><div class="dmx-empty">No customers found yet.</div></td></tr>
+                        <tr><td colspan="7"><div class="dmx-empty">No customers found yet.</div></td></tr>
                     <?php endif; ?>
                 </tbody>
             </table>
         </div>
+        <?php endif; ?>
 
         <?php if ($edit_customer && $can_manage_customer) : ?>
             <div id="dmx-edit-customer" class="dmx-form-card">
@@ -23209,6 +23224,59 @@ private function render_inspections_tab($is_admin = false) {
         <?php else : ?>
             <div id="dmx-add-customer" class="dmx-empty">You can search and use customer records, but adding or changing customer details is handled by managers, coordinators, sales, or technicians.</div>
         <?php endif; ?>
+        <?php return ob_get_clean();
+    }
+
+    private function render_customer_detail_view($customer, $base_url, $can_manage_customer, $can_view_quotes, $can_view_invoices, $can_create_work_orders) {
+        $customer_id = (int) $customer->ID;
+        $meta = array(
+            'company_name' => get_post_meta($customer_id, '_dmx_company_name', true),
+            'first_name' => get_post_meta($customer_id, '_dmx_customer_first_name', true),
+            'last_name' => get_post_meta($customer_id, '_dmx_customer_last_name', true),
+            'contact_name' => get_post_meta($customer_id, '_dmx_customer_contact_name', true),
+            'email' => get_post_meta($customer_id, '_dmx_customer_email', true),
+            'phone' => get_post_meta($customer_id, '_dmx_customer_phone', true),
+            'mobile' => get_post_meta($customer_id, '_dmx_customer_mobile', true),
+            'address_1' => get_post_meta($customer_id, '_dmx_customer_address_1', true),
+            'city' => get_post_meta($customer_id, '_dmx_customer_city', true),
+            'province' => get_post_meta($customer_id, '_dmx_customer_province', true),
+            'postal_code' => get_post_meta($customer_id, '_dmx_customer_postal_code', true),
+            'country' => get_post_meta($customer_id, '_dmx_customer_country', true),
+            'service_site_name' => get_post_meta($customer_id, '_dmx_service_site_name', true),
+            'service_site_address' => get_post_meta($customer_id, '_dmx_service_site_address', true),
+            'site_city' => get_post_meta($customer_id, '_dmx_site_city', true),
+            'site_province_state' => get_post_meta($customer_id, '_dmx_site_province_state', true),
+            'site_postal_zip' => get_post_meta($customer_id, '_dmx_site_postal_zip', true),
+            'site_notes' => get_post_meta($customer_id, '_dmx_site_notes', true),
+        );
+        ob_start(); ?>
+        <div class="dmx-form-card">
+            <div class="dmx-action-row" style="justify-content:space-between;">
+                <h4 class="dmx-panel-title" style="margin:0;">Customer Detail</h4>
+                <div class="dmx-action-row">
+                    <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url($base_url); ?>">Back to Customers</a>
+                    <?php if ($can_manage_customer) : ?><a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(add_query_arg(array('dmx_edit_customer' => $customer_id), $base_url)); ?>#dmx-edit-customer">Edit Customer</a><?php endif; ?>
+                    <?php if ($can_view_quotes) : ?><a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url($this->get_dashboard_url(false, array('dmx_tab' => 'sales', 'dmx_subtab' => 'quotes'))); ?>">Create Quote for Customer</a><?php endif; ?>
+                    <?php if ($can_view_invoices) : ?><a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url($this->get_dashboard_url(false, array('dmx_tab' => 'sales', 'dmx_subtab' => 'invoices'))); ?>">Create Invoice for Customer</a><?php endif; ?>
+                    <?php if ($can_create_work_orders) : ?><a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url($this->get_dashboard_url(false, array('dmx_tab' => 'sales', 'dmx_subtab' => 'work_orders'))); ?>">Create Work Order</a><?php endif; ?>
+                </div>
+            </div>
+            <div class="dmx-form-grid-3">
+                <div class="dmx-field"><label>Customer #</label><input type="text" readonly value="<?php echo esc_attr($this->ensure_customer_number($customer_id)); ?>"></div>
+                <div class="dmx-field"><label>Legacy Customer Number</label><input type="text" readonly value="<?php echo esc_attr(get_post_meta($customer_id, '_dmx_legacy_customer_number', true)); ?>"></div>
+                <div class="dmx-field"><label>Date Added</label><input type="text" readonly value="<?php echo esc_attr(get_the_date('', $customer)); ?>"></div>
+            </div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Customer / Company Name</label><input type="text" readonly value="<?php echo esc_attr($meta['company_name'] ?: $customer->post_title); ?>"></div><div class="dmx-field"><label>First Name</label><input type="text" readonly value="<?php echo esc_attr($meta['first_name']); ?>"></div><div class="dmx-field"><label>Last Name</label><input type="text" readonly value="<?php echo esc_attr($meta['last_name']); ?>"></div></div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Email</label><input type="text" readonly value="<?php echo esc_attr($meta['email']); ?>"></div><div class="dmx-field"><label>Phone</label><input type="text" readonly value="<?php echo esc_attr($meta['phone']); ?>"></div><div class="dmx-field"><label>Mobile</label><input type="text" readonly value="<?php echo esc_attr($meta['mobile']); ?>"></div></div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Billing Address</label><input type="text" readonly value="<?php echo esc_attr($meta['address_1']); ?>"></div><div class="dmx-field"><label>City</label><input type="text" readonly value="<?php echo esc_attr($meta['city']); ?>"></div><div class="dmx-field"><label>Province/State</label><input type="text" readonly value="<?php echo esc_attr($meta['province']); ?>"></div></div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Postal/Zip</label><input type="text" readonly value="<?php echo esc_attr($meta['postal_code']); ?>"></div><div class="dmx-field"><label>Country</label><input type="text" readonly value="<?php echo esc_attr($meta['country']); ?>"></div><div class="dmx-field"><label>Contact Name</label><input type="text" readonly value="<?php echo esc_attr($meta['contact_name']); ?>"></div></div>
+            <div class="dmx-field"><label>Customer Notes</label><textarea readonly><?php echo esc_textarea((string) get_post_field('post_content', $customer_id)); ?></textarea></div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Service Site Name</label><input type="text" readonly value="<?php echo esc_attr($meta['service_site_name']); ?>"></div><div class="dmx-field"><label>Service Site Address</label><input type="text" readonly value="<?php echo esc_attr($meta['service_site_address']); ?>"></div><div class="dmx-field"><label>Site City</label><input type="text" readonly value="<?php echo esc_attr($meta['site_city']); ?>"></div></div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Site Province/State</label><input type="text" readonly value="<?php echo esc_attr($meta['site_province_state']); ?>"></div><div class="dmx-field"><label>Site Postal/Zip</label><input type="text" readonly value="<?php echo esc_attr($meta['site_postal_zip']); ?>"></div><div class="dmx-field"><label>Imported Batch/Source</label><input type="text" readonly value="<?php echo esc_attr(trim((string) get_post_meta($customer_id, '_dmx_import_batch_id', true) . ' / ' . (string) get_post_meta($customer_id, '_dmx_import_source', true), ' /')); ?>"></div></div>
+            <div class="dmx-field"><label>Site Notes</label><textarea readonly><?php echo esc_textarea($meta['site_notes']); ?></textarea></div>
+            <div class="dmx-form-grid-3"><div class="dmx-field"><label>Imported At</label><input type="text" readonly value="<?php echo esc_attr(get_post_meta($customer_id, '_dmx_imported_at', true)); ?>"></div><div class="dmx-field"><label>Imported By</label><input type="text" readonly value="<?php echo esc_attr((string) get_post_meta($customer_id, '_dmx_imported_by', true)); ?>"></div><div class="dmx-field"><label>Recent Quotes</label><input type="text" readonly value="No records yet."></div></div>
+            <div class="dmx-form-grid"><div class="dmx-field"><label>Recent Invoices</label><input type="text" readonly value="No records yet."></div><div class="dmx-field"><label>Work Orders</label><input type="text" readonly value="No records yet."></div></div>
+        </div>
         <?php return ob_get_clean();
     }
 
