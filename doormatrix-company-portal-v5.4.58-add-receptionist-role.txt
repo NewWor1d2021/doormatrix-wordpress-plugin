@@ -8412,6 +8412,9 @@ class DoorMatrix_Company_Portal {
             case 'repair_legacy_attachment_ownership':
                 $this->handle_legacy_attachment_ownership_repair($tab);
                 break;
+            case 'data_import_update_settings':
+                $this->handle_data_import_update_settings($tab);
+                break;
             case 'data_import_upload_csv':
                 $this->handle_data_import_upload_csv($tab);
                 break;
@@ -33109,16 +33112,45 @@ private function get_work_order_items_summary_html($work_order_id) {
         $this->redirect_with_message('settings', 'success', 'Import session cleared. Upload a CSV to start again.');
     }
 
+    private function handle_data_import_update_settings($tab = 'settings') {
+        $company_key = sanitize_key((string) $this->get_current_user_company_key());
+        if (!$this->current_user_can_import_customer_data() || $company_key === '') { $this->redirect_with_message($tab, 'error', 'Import blocked.'); }
+        $state = get_option($this->get_data_import_state_option_key($company_key), array());
+        $source = isset($_POST['dmx_import_source']) ? sanitize_key((string) wp_unslash($_POST['dmx_import_source'])) : 'excel_csv';
+        $mode = isset($_POST['dmx_import_mode']) ? sanitize_key((string) wp_unslash($_POST['dmx_import_mode'])) : 'basic_customers';
+        $valid_sources = array('excel_csv', 'quickbooks', 'jobber', 'servicetitan', 'wave', 'other');
+        $valid_modes = array('basic_customers', 'standard_history', 'advanced_full', 'done_for_you');
+        if (!in_array($source, $valid_sources, true)) { $source = 'excel_csv'; }
+        if (!in_array($mode, $valid_modes, true)) { $mode = 'basic_customers'; }
+        $state['import_source'] = $source;
+        $state['import_mode'] = $mode;
+        update_option($this->get_data_import_state_option_key($company_key), $state);
+        $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_settings_saved','object_type'=>'import','object_id'=>'customer_csv','after_summary'=>'source:'.$source.',mode:'.$mode));
+        $message = $mode === 'basic_customers' ? 'Import settings saved.' : 'Import settings saved. Only customer CSV import is active right now; selected mode is staged for a future release.';
+        $this->redirect_with_message('settings', 'success', $message);
+    }
+
     private function render_settings_data_import_page() {
         if (!$this->current_user_can_import_customer_data()) { return '<div class="dmx-message dmx-message-error">Only company managers can run customer imports.</div>'; }
         $company_key = sanitize_key((string) $this->get_current_user_company_key());
         if ($company_key === '') { return '<div class="dmx-message dmx-message-error">Missing company key. Import is blocked for safety.</div>'; }
         $state = get_option($this->get_data_import_state_option_key($company_key), array());
+        $selected_source = sanitize_key((string) ($state['import_source'] ?? 'excel_csv'));
+        $selected_mode = sanitize_key((string) ($state['import_mode'] ?? 'basic_customers'));
+        $source_options = array('excel_csv' => 'Excel / CSV', 'quickbooks' => 'QuickBooks', 'jobber' => 'Jobber', 'servicetitan' => 'ServiceTitan', 'wave' => 'Wave', 'other' => 'Other');
+        $mode_options = array('basic_customers' => 'Basic Import: Customers only', 'standard_history' => 'Standard Import: Customers + invoice/payment history', 'advanced_full' => 'Advanced Import: Customers + invoices + jobs + attachments', 'done_for_you' => 'Done-For-You Migration Service');
+        if (!isset($source_options[$selected_source])) { $selected_source = 'excel_csv'; }
+        if (!isset($mode_options[$selected_mode])) { $selected_mode = 'basic_customers'; }
+        $mode_notice = $selected_mode === 'basic_customers' ? '' : 'Only customer CSV import is active right now. ' . $mode_options[$selected_mode] . ' is staged for a future release.';
         ob_start(); echo '<div class="dmx-card"><h3 class="dmx-panel-title">Import From Previous Software</h3><p>Import Wizard v2 (testing): customer CSV import with mapping, dry run, duplicate checks, and batch processing.</p>';
-        echo '<form method="post" style="margin:0 0 12px 0;">';
-        echo '<div class="dmx-form-grid"><div class="dmx-field"><label>Source software</label><select disabled><option>QuickBooks</option><option>Jobber</option><option>ServiceTitan</option><option>Wave</option><option selected>Excel / CSV (active)</option><option>Other</option></select></div>';
-        echo '<div class="dmx-field"><label>Import mode</label><select disabled><option selected>Basic Import: Customers only (active)</option><option>Standard Import: Customers + invoice/payment history later</option><option>Advanced Import: Customers + invoices + jobs + attachments later</option><option>Done-For-You Migration Service</option></select></div></div>';
-        echo '<p style="margin:6px 0 0;color:#61738b;">Only Basic Import (customers) is enabled right now. Other modes are staged for future releases.</p></form>';
+        echo '<form method="post" style="margin:0 0 12px 0;">'; wp_nonce_field('dmx_portal_submit','dmx_nonce');
+        echo '<input type="hidden" name="dmx_portal_action" value="data_import_update_settings"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
+        echo '<div class="dmx-form-grid"><div class="dmx-field"><label>Source software</label><select name="dmx_import_source">'; foreach ($source_options as $source_key => $source_label) { echo '<option value="'.esc_attr($source_key).'" '.selected($selected_source, $source_key, false).'>'.esc_html($source_label).'</option>'; } echo '</select></div>';
+        echo '<div class="dmx-field"><label>Import mode</label><select name="dmx_import_mode">'; foreach ($mode_options as $mode_key => $mode_label) { echo '<option value="'.esc_attr($mode_key).'" '.selected($selected_mode, $mode_key, false).'>'.esc_html($mode_label).'</option>'; } echo '</select></div></div><button class="dmx-btn dmx-btn-secondary" type="submit">Save import settings</button>';
+        echo '<p style="margin:8px 0 0;color:#61738b;">This source currently uses CSV export/import for testing.</p>';
+        echo '<p style="margin:6px 0 0;color:#61738b;">Customer CSV import is active for testing. Invoice, payment, job history, and attachment imports will be added after customer import is stable.</p>';
+        if ($mode_notice !== '') { echo '<div class="dmx-message dmx-message-info" style="margin-top:10px;">'.esc_html($mode_notice).'</div>'; }
+        echo '</form>';
         echo '<form method="post" enctype="multipart/form-data">'; wp_nonce_field('dmx_portal_submit','dmx_nonce');
         echo '<input type="hidden" name="dmx_portal_action" value="data_import_upload_csv"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
         echo '<div class="dmx-field"><label>Step 1 — Upload CSV</label><input type="file" name="dmx_customer_csv" accept=".csv,text/csv" required></div><button class="dmx-btn" type="submit">Upload & Preview</button></form>';
@@ -33146,7 +33178,8 @@ private function get_work_order_items_summary_html($work_order_id) {
         if ((int)$file['size']<=0 || (int)$file['size']>5*1024*1024) { $this->redirect_with_message($tab,'error','CSV file size must be under 5MB.'); }
         $rows=array_map('str_getcsv', file($file['tmp_name'])); $headers=array(); if(!empty($rows)){ $headers=array_map('sanitize_text_field', (array)array_shift($rows)); }
         $auto_map = $this->build_data_import_auto_map($headers);
-        update_option($this->get_data_import_state_option_key($company_key), array('headers'=>$headers,'rows'=>$rows,'row_count'=>count($rows),'map'=>$auto_map,'file_name'=>$name));
+        $state = get_option($this->get_data_import_state_option_key($company_key), array());
+        update_option($this->get_data_import_state_option_key($company_key), array_merge($state, array('headers'=>$headers,'rows'=>$rows,'row_count'=>count($rows),'map'=>$auto_map,'file_name'=>$name)));
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_session_started','object_type'=>'import','object_id'=>'customer_csv','after_summary'=>'source:csv'));
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_csv_uploaded','object_type'=>'import','object_id'=>'customer_csv','after_summary'=>'file:'.$name.',rows:'.count($rows)));
         $this->redirect_with_message('settings','success','CSV uploaded and preview ready.'); }
@@ -33208,7 +33241,7 @@ private function get_work_order_items_summary_html($work_order_id) {
             $id = wp_insert_post(array('post_type'=>'dm_customer','post_status'=>'publish','post_title'=>$title!==''?$title:'Imported Customer','post_content'=>$notes,'post_author'=>get_current_user_id()));
             if (!$id || is_wp_error($id)) { $errors++; $skipped++; if (count($issues) < 20) { $issues[] = array('row_number' => 0, 'reason' => 'Insert failed for customer: ' . $title); } continue; }
             update_post_meta($id,'_dmx_company_key',$company_key); update_post_meta($id,'_dmx_company_name',$title); update_post_meta($id,'_dmx_customer_email',$email); update_post_meta($id,'_dmx_customer_phone',$phone); update_post_meta($id,'_dmx_import_batch_id',$batch_id); update_post_meta($id,'_dmx_import_source','csv_customer_import'); update_post_meta($id,'_dmx_imported_at',current_time('mysql')); update_post_meta($id,'_dmx_imported_by',get_current_user_id());
-            update_post_meta($id,'_dmx_import_session_id',$batch_id); update_post_meta($id,'_dmx_import_source_label',sanitize_text_field((string) ($state['file_name'] ?? 'Excel / CSV'))); update_post_meta($id,'_dmx_legacy_customer_number',$legacy);
+            update_post_meta($id,'_dmx_import_session_id',$batch_id); update_post_meta($id,'_dmx_import_source_label',sanitize_text_field((string) ($state['file_name'] ?? 'Excel / CSV'))); update_post_meta($id,'_dmx_import_source_system',sanitize_key((string) ($state['import_source'] ?? 'excel_csv'))); update_post_meta($id,'_dmx_import_mode',sanitize_key((string) ($state['import_mode'] ?? 'basic_customers'))); update_post_meta($id,'_dmx_import_company_key',$company_key); update_post_meta($id,'_dmx_legacy_customer_number',$legacy);
             $this->ensure_customer_number($id); $created++;
         }
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_batch_completed','object_type'=>'import','object_id'=>$batch_id,'after_summary'=>'batch:'.((int) $chunk_index + 1).'/'.count($chunks).',created:'.$created.',skipped:'.$skipped.',duplicates:'.$duplicates.',errors:'.$errors));
@@ -33229,7 +33262,7 @@ private function get_work_order_items_summary_html($work_order_id) {
             }
         }
         $state['summary']=array('total_rows'=>(int) ($state['row_count'] ?? 0),'created'=>$created,'skipped'=>$skipped,'duplicates'=>$duplicates,'errors'=>$errors,'batch_id'=>$batch_id,'issues'=>$issues); $state['imported_customers_preview'] = $preview_customers; update_option($this->get_data_import_state_option_key($company_key),$state);
-        $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_completed','object_type'=>'import','object_id'=>$batch_id,'after_summary'=>'created:'.$created.',skipped:'.$skipped.',duplicates:'.$duplicates.',errors:'.$errors));
+        $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_completed','object_type'=>'import','object_id'=>$batch_id,'after_summary'=>'created:'.$created.',skipped:'.$skipped.',duplicates:'.$duplicates.',errors:'.$errors.',source:'.sanitize_key((string) ($state['import_source'] ?? 'excel_csv')).',mode:'.sanitize_key((string) ($state['import_mode'] ?? 'basic_customers'))));
         $this->redirect_with_message('settings','success','Customer import completed.');
     }
 
