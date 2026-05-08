@@ -23324,8 +23324,8 @@ private function render_inspections_tab($is_admin = false) {
                 </div>
             <?php endforeach; else : ?><div class="dmx-readonly-value">No customer history entries yet.</div><?php endif; ?>
             <h4 class="dmx-section-title">Customer Files</h4>
-            <?php if ($can_manage_customer) : ?><form method="post" enctype="multipart/form-data" style="margin-bottom:10px;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="upload_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="file" name="dmx_customer_history_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt" required><button class="dmx-btn dmx-btn-secondary" type="submit">Upload File</button></form><?php endif; ?>
-            <?php if (!empty($file_entries)) : ?><ul><?php foreach ((array) $file_entries as $file_entry) : ?><li><a href="<?php echo esc_url($this->get_secure_attachment_download_url((int) $file_entry['attachment_id'], $customer_id)); ?>"><?php echo esc_html((string) $file_entry['label']); ?></a></li><?php endforeach; ?></ul><?php else : ?><div class="dmx-readonly-value">No customer files uploaded yet.</div><?php endif; ?>
+            <?php if ($can_manage_customer) : ?><form method="post" enctype="multipart/form-data" style="margin-bottom:10px;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="upload_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="file" name="dmx_customer_history_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt" required><button class="dmx-btn dmx-btn-secondary" type="submit">Upload File</button></form><?php endif; ?>
+            <?php if (!empty($file_entries)) : ?><ul><?php foreach ((array) $file_entries as $file_entry) : ?><li><?php echo esc_html((string) ($file_entry['label'] ?? "File")); ?> — <?php echo esc_html(!empty($file_entry['uploaded_at']) ? date_i18n(get_option('date_format'), strtotime((string) $file_entry['uploaded_at'])) : ""); ?> — <a href="<?php echo esc_url($this->get_secure_attachment_download_url((int) $file_entry['attachment_id'], $customer_id)); ?>">View / Download</a></li><?php endforeach; ?></ul><?php else : ?><div class="dmx-readonly-value">No customer files uploaded yet.</div><?php endif; ?>
         </div>
         <?php return ob_get_clean();
     }
@@ -23339,11 +23339,24 @@ private function render_inspections_tab($is_admin = false) {
         update_post_meta((int) $customer_id, '_dmx_customer_history_entries', $history);
     }
     private function get_customer_history_file_entries($customer_id) {
-        $history = $this->get_customer_history_entries($customer_id);
+        $stored_files = get_post_meta((int) $customer_id, '_dmx_customer_files', true);
         $files = array();
+        if (is_array($stored_files)) {
+            foreach ($stored_files as $file) {
+                $attachment_id = isset($file['attachment_id']) ? (int) $file['attachment_id'] : 0;
+                if ($attachment_id <= 0) { continue; }
+                $files[] = array(
+                    'attachment_id' => $attachment_id,
+                    'label' => sanitize_text_field((string) ($file['label'] ?? ('File #' . $attachment_id))),
+                    'uploaded_at' => sanitize_text_field((string) ($file['uploaded_at'] ?? '')),
+                );
+            }
+        }
+        if (!empty($files)) { return $files; }
+        $history = $this->get_customer_history_entries($customer_id);
         foreach ((array) $history as $entry) {
             if (!empty($entry['type']) && $entry['type'] === 'file' && !empty($entry['attachment_id'])) {
-                $files[] = array('attachment_id' => (int) $entry['attachment_id'], 'label' => sanitize_text_field((string) ($entry['label'] ?? ('File #' . (int) $entry['attachment_id']))));
+                $files[] = array('attachment_id' => (int) $entry['attachment_id'], 'label' => sanitize_text_field((string) ($entry['label'] ?? ('File #' . (int) $entry['attachment_id']))), 'uploaded_at' => sanitize_text_field((string) ($entry['created_at'] ?? '')));
             }
         }
         return $files;
@@ -33150,20 +33163,53 @@ private function get_work_order_items_summary_html($work_order_id) {
     }
     private function handle_upload_customer_history_file($tab = 'customers') {
         $customer_id = isset($_POST['customer_id']) ? absint($_POST['customer_id']) : 0;
-        if (!$this->can_manage_customers() || $customer_id <= 0 || empty($_FILES['dmx_customer_history_file']['tmp_name'])) { $this->redirect_with_message('customers', 'error', 'Upload blocked.'); }
+        if (!is_user_logged_in() || !$this->can_manage_customers() || $customer_id <= 0) { $this->redirect_with_message('customers', 'error', 'Upload blocked.'); }
         $customer = get_post($customer_id);
         if (!$customer || $customer->post_type !== 'dm_customer') { $this->redirect_with_message('customers', 'error', 'Customer not found.'); }
         $customer_company = sanitize_key((string) get_post_meta($customer_id, '_dmx_company_key', true));
         $current_company = sanitize_key((string) $this->get_current_user_company_key());
         if ($customer_company === '' || $current_company === '' || $customer_company !== $current_company) { $this->redirect_with_message('customers', 'error', 'Upload blocked.'); }
-        require_once ABSPATH . 'wp-admin/includes/file.php'; require_once ABSPATH . 'wp-admin/includes/image.php';
-        $uploaded = wp_handle_upload($_FILES['dmx_customer_history_file'], array('test_form' => false, 'mimes' => array('pdf' => 'application/pdf', 'jpg|jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'csv' => 'text/csv', 'txt' => 'text/plain')));
-        if (!empty($uploaded['error']) || empty($uploaded['file'])) { $this->redirect_with_message('customers', 'error', 'Upload failed.'); }
-        $attachment_id = wp_insert_attachment(array('post_title' => sanitize_file_name((string) $_FILES['dmx_customer_history_file']['name']), 'post_mime_type' => sanitize_text_field((string) ($uploaded['type'] ?? 'application/octet-stream')), 'post_status' => 'inherit'), $uploaded['file'], $customer_id);
-        if (!$attachment_id || is_wp_error($attachment_id)) { $this->redirect_with_message('customers', 'error', 'Upload failed.'); }
+        if (!isset($_FILES['dmx_customer_history_file']) || !is_array($_FILES['dmx_customer_history_file'])) { $this->redirect_with_message('customers', 'error', 'File upload failed. Please try a PDF, JPG, PNG, WebP, CSV, or TXT file.'); }
+        $file = $_FILES['dmx_customer_history_file'];
+        $error_code = isset($file['error']) ? (int) $file['error'] : UPLOAD_ERR_NO_FILE;
+        if ($error_code !== UPLOAD_ERR_OK || empty($file['tmp_name'])) { $this->redirect_with_message('customers', 'error', 'File upload failed. Please try a PDF, JPG, PNG, WebP, CSV, or TXT file.'); }
+        $max_bytes = 10 * 1024 * 1024;
+        $size = isset($file['size']) ? (int) $file['size'] : 0;
+        if ($size <= 0 || $size > $max_bytes) { $this->redirect_with_message('customers', 'error', 'File is too large. Maximum allowed size is 10MB.'); }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        $allowed_mimes = array('pdf' => 'application/pdf', 'jpg|jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'csv' => 'text/csv', 'txt' => 'text/plain');
+        $uploaded = wp_handle_upload($file, array('test_form' => false, 'mimes' => $allowed_mimes));
+        if (!empty($uploaded['error']) || empty($uploaded['file'])) { $this->redirect_with_message('customers', 'error', 'File upload failed. Please try a PDF, JPG, PNG, WebP, CSV, or TXT file.'); }
+
+        $safe_name = sanitize_file_name((string) ($file['name'] ?? 'Customer File'));
+        $attachment_id = wp_insert_attachment(array('post_title' => $safe_name, 'post_mime_type' => sanitize_text_field((string) ($uploaded['type'] ?? 'application/octet-stream')), 'post_status' => 'inherit'), $uploaded['file'], $customer_id);
+        if (!$attachment_id || is_wp_error($attachment_id)) { $this->redirect_with_message('customers', 'error', 'File upload failed. Please try a PDF, JPG, PNG, WebP, CSV, or TXT file.'); }
+
         $this->dmx_stamp_attachment_ownership($attachment_id, $customer_id, 'dm_customer', $current_company);
-        $metadata = wp_generate_attachment_metadata($attachment_id, $uploaded['file']); if (!is_wp_error($metadata) && !empty($metadata)) { wp_update_attachment_metadata($attachment_id, $metadata); }
-        $this->add_customer_history_entry($customer_id, array('type' => 'file', 'type_label' => 'File Upload', 'attachment_id' => (int) $attachment_id, 'label' => sanitize_file_name((string) $_FILES['dmx_customer_history_file']['name']), 'summary' => 'Uploaded historical file', 'source' => 'manual_upload', 'created_at' => current_time('mysql')));
+        if (function_exists('wp_generate_attachment_metadata')) {
+            $metadata = wp_generate_attachment_metadata($attachment_id, $uploaded['file']);
+            if (!is_wp_error($metadata) && !empty($metadata)) { wp_update_attachment_metadata($attachment_id, $metadata); }
+        }
+
+        update_post_meta($attachment_id, '_dmx_parent_customer_id', $customer_id);
+        update_post_meta($attachment_id, '_dmx_customer_file_uploaded_at', current_time('mysql'));
+
+        $customer_files = get_post_meta($customer_id, '_dmx_customer_files', true);
+        $customer_files = is_array($customer_files) ? $customer_files : array();
+        $customer_files[] = array(
+            'attachment_id' => (int) $attachment_id,
+            'label' => $safe_name,
+            'file_type' => sanitize_text_field((string) ($uploaded['type'] ?? '')),
+            'uploaded_at' => current_time('mysql'),
+            'uploaded_by' => get_current_user_id(),
+        );
+        update_post_meta($customer_id, '_dmx_customer_files', $customer_files);
+
+        $this->add_customer_history_entry($customer_id, array('type' => 'file', 'type_label' => 'File Upload', 'attachment_id' => (int) $attachment_id, 'label' => $safe_name, 'summary' => 'Uploaded historical file', 'source' => 'manual_upload', 'created_at' => current_time('mysql')));
         wp_safe_redirect(add_query_arg(array('dmx_tab' => 'customers', 'dmx_view_customer' => $customer_id), $this->get_settings_base_url(is_admin()))); exit;
     }
 
