@@ -33219,7 +33219,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $friendly_error = 'File upload failed. Please try a PDF, JPG, PNG, WebP, CSV, or TXT file.';
         if (!is_user_logged_in() || empty($_POST['dmx_nonce']) || !wp_verify_nonce(sanitize_text_field((string) wp_unslash($_POST['dmx_nonce'])), 'dmx_portal_submit')) { $this->redirect_with_message('customers', 'error', 'Upload blocked.'); }
         $customer_id = isset($_POST['customer_id']) ? absint($_POST['customer_id']) : 0;
-        if (!is_user_logged_in() || !$this->can_manage_customers() || $customer_id <= 0) { $this->record_customer_upload_error(array('customer_id' => $customer_id, 'message' => 'Permission or customer validation failed')); $this->redirect_with_message('customers', 'error', $friendly_error, array('dmx_view_customer' => $customer_id)); }
+        if (!is_user_logged_in() || !$this->current_user_can_manage_customers() || $customer_id <= 0) { $this->record_customer_upload_error(array('customer_id' => $customer_id, 'message' => 'Permission or customer validation failed')); $this->redirect_with_message('customers', 'error', $friendly_error, array('dmx_view_customer' => $customer_id)); }
         $customer = get_post($customer_id);
         if (!$customer || $customer->post_type !== 'dm_customer') { $this->record_customer_upload_error(array('customer_id' => $customer_id, 'message' => 'Customer not found or wrong post type')); $this->redirect_with_message('customers', 'error', $friendly_error, array('dmx_view_customer' => $customer_id)); }
         $customer_company = sanitize_key((string) get_post_meta($customer_id, '_dmx_company_key', true));
