@@ -23338,6 +23338,7 @@ private function render_inspections_tab($is_admin = false) {
             <div class="dmx-field dmx-compact-field"><label>Customer Notes</label><div class="dmx-readonly-value"><?php echo esc_html((string) (get_post_meta($customer_id, '_dmx_customer_notes', true) ?: get_post_field('post_content', $customer_id)) ?: '—'); ?></div></div>
             <h4 class="dmx-section-title">Customer History</h4>
             <?php if (!empty($history_entries)) : foreach ((array) $history_entries as $history_entry) : ?>
+                <?php if (!empty($history_entry['type']) && (string) $history_entry['type'] === 'file') { continue; } ?>
                 <div class="dmx-card" style="margin:0 0 10px;padding:12px;">
                     <strong><?php echo esc_html((string) ($history_entry['type_label'] ?? 'History')); ?></strong>
                     <div style="margin-top:6px;font-size:13px;color:#334155;"><?php echo esc_html((string) ($history_entry['summary'] ?? '')); ?></div>
@@ -23346,7 +23347,6 @@ private function render_inspections_tab($is_admin = false) {
             <h4 class="dmx-section-title">Customer Files</h4>
             <?php if ($can_manage_customer) : ?><form method="post" enctype="multipart/form-data" style="margin-bottom:10px;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="upload_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="file" name="dmx_customer_history_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt" required><button class="dmx-btn dmx-btn-secondary" type="submit">Upload File</button></form><?php endif; ?>
             <?php if (!empty($file_entries)) : ?><ul><?php foreach ((array) $file_entries as $file_index => $file_entry) : ?><li><?php $file_attachment_id = (int) ($file_entry['attachment_id'] ?? 0); $view_url = $this->get_secure_attachment_download_url($file_attachment_id, $customer_id, 'view'); $download_url = $this->get_secure_attachment_download_url($file_attachment_id, $customer_id, 'download'); ?><?php echo esc_html((string) ($file_entry['label'] ?? "File")); ?> — <?php echo esc_html(!empty($file_entry['uploaded_at']) ? date_i18n(get_option('date_format'), strtotime((string) $file_entry['uploaded_at'])) : ""); ?> — <a href="<?php echo esc_url($view_url); ?>" target="_blank" rel="noopener">View</a> — <a href="<?php echo esc_url($download_url); ?>">Download</a><?php if ($can_manage_customer) : ?> — <form method="post" style="display:inline;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="delete_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="attachment_id" value="<?php echo esc_attr((string) absint($file_entry['attachment_id'] ?? 0)); ?>"><input type="hidden" name="file_index" value="<?php echo esc_attr((string) $file_index); ?>"><button class="dmx-btn dmx-btn-secondary" type="submit" onclick="return confirm('Delete this file?');">Delete</button></form><?php endif; ?></li><?php endforeach; ?></ul><?php else : ?><div class="dmx-readonly-value">No customer files uploaded yet.</div><?php endif; ?>
-            <?php if (current_user_can('manage_options')) : $last_upload_error = get_option('_dmx_last_customer_file_upload_error', array()); if (!empty($last_upload_error) && is_array($last_upload_error)) : ?><details style="margin-top:12px;"><summary><strong>Advanced Upload Debug</strong></summary><div class="dmx-readonly-value" style="margin-top:8px;"><pre style="white-space:pre-wrap;word-break:break-word;"><?php echo esc_html(wp_json_encode($last_upload_error, JSON_PRETTY_PRINT)); ?></pre></div></details><?php endif; endif; ?>
         </div>
         <?php return ob_get_clean();
     }
@@ -23371,13 +23371,6 @@ private function render_inspections_tab($is_admin = false) {
                     'label' => sanitize_text_field((string) ($file['file_name'] ?? $file['label'] ?? ('File #' . $attachment_id))),
                     'uploaded_at' => sanitize_text_field((string) ($file['uploaded_at'] ?? '')),
                 );
-            }
-        }
-        if (!empty($files)) { return $files; }
-        $history = $this->get_customer_history_entries($customer_id);
-        foreach ((array) $history as $entry) {
-            if (!empty($entry['type']) && $entry['type'] === 'file' && !empty($entry['attachment_id'])) {
-                $files[] = array('attachment_id' => (int) $entry['attachment_id'], 'label' => sanitize_text_field((string) ($entry['label'] ?? ('File #' . (int) $entry['attachment_id']))), 'uploaded_at' => sanitize_text_field((string) ($entry['created_at'] ?? '')));
             }
         }
         return $files;
@@ -33151,8 +33144,7 @@ private function get_work_order_items_summary_html($work_order_id) {
 
     private function render_data_import_preview_cards($preview_rows, $preview_map, $total_customers = 0) {
         if (empty($preview_rows) || !is_array($preview_rows) || empty($preview_map) || !is_array($preview_map)) { return; }
-        $total_customers = max(0, (int) $total_customers);
-        echo '<div style="display:grid;gap:12px;">';
+        echo '<div class="dmx-table-wrap"><table class="dmx-table"><thead><tr><th>Customer / Legacy #</th><th>Customer Name</th><th>Business / Company Name</th><th>Status</th><th></th></tr></thead><tbody>';
         foreach ((array) $preview_rows as $card_index => $preview_row) {
             $preview_assoc = isset($preview_row['assoc']) && is_array($preview_row['assoc']) ? $preview_row['assoc'] : array();
             $row_number = isset($preview_row['row_number']) ? (int) $preview_row['row_number'] : 0;
@@ -33174,17 +33166,23 @@ private function get_work_order_items_summary_html($work_order_id) {
             $site_postal_zip = $this->get_data_import_preview_value($preview_assoc, $preview_map, 'site_postal_zip');
             $site_notes = $this->get_data_import_preview_value($preview_assoc, $preview_map, 'site_notes');
             $customer_notes = $this->get_data_import_preview_value($preview_assoc, $preview_map, 'customer_notes');
-            $has_service_location = ($service_site_name !== '' || $service_site_address !== '' || $site_city !== '' || $site_province_state !== '' || $site_postal_zip !== '' || $site_notes !== '');
-            $customer_label = $total_customers > 0 ? ('Customer ' . $customer_number . ' of ' . $total_customers) : ('Customer ' . $customer_number);
-            echo '<div class="dmx-card" style="margin:0;padding:14px;"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;"><strong>'.esc_html($company_name !== '' ? $company_name : '—').'</strong><span>'.esc_html($customer_label).'</span></div>';
-            echo '<div style="margin-top:4px;color:#61738b;"><small>CSV row '.esc_html((string) $row_number).'</small></div>';
-            if ($legacy_customer_number !== '') { echo '<div style="margin-top:4px;"><small>Legacy Customer #: '.esc_html($legacy_customer_number).'</small></div>'; }
-            echo '<div style="margin-top:10px;"><strong>Contact</strong><ul><li>Contact Name: '.esc_html($contact_name !== '' ? $contact_name : '—').'</li><li>Email: '.esc_html($email !== '' ? $email : '—').'</li><li>Phone: '.esc_html($phone !== '' ? $phone : '—').'</li><li>Mobile: '.esc_html($mobile !== '' ? $mobile : '—').'</li></ul></div>';
-            echo '<div><strong>Billing</strong><ul><li>Billing Address: '.esc_html($billing_address !== '' ? $billing_address : '—').'</li><li>City: '.esc_html($city !== '' ? $city : '—').'</li><li>Province/State: '.esc_html($province_state !== '' ? $province_state : '—').'</li><li>Postal/Zip: '.esc_html($postal_zip !== '' ? $postal_zip : '—').'</li></ul></div>';
-            if ($has_service_location) { echo '<p style="margin:8px 0 0;color:#61738b;"><em>Service location will be saved to Customer History.</em></p>'; }
-            echo '<div><strong>Notes</strong><p style="margin:6px 0 0;">Customer Notes: '.esc_html($customer_notes !== '' ? $customer_notes : '—').'</p></div></div>';
+            $status = 'Ready to import';
+            $details_id = 'dmx-preview-row-' . absint($customer_number) . '-' . absint($row_number);
+            echo '<tr>';
+            echo '<td>'.esc_html($customer_number).($legacy_customer_number !== '' ? ' / '.esc_html($legacy_customer_number) : '').'</td>';
+            echo '<td>'.esc_html($contact_name !== '' ? $contact_name : '—').'</td>';
+            echo '<td>'.esc_html($company_name !== '' ? $company_name : '—').'</td>';
+            echo '<td>'.esc_html($status).'</td>';
+            echo '<td><button type="button" class="dmx-btn dmx-btn-secondary" style="padding:4px 8px;" onclick="var d=document.getElementById(\''.esc_attr($details_id).'\');if(d){d.style.display=d.style.display===\'none\'?\'table-row\':\'none\';}">View details</button></td>';
+            echo '</tr>';
+            echo '<tr id="'.esc_attr($details_id).'" style="display:none;"><td colspan="5"><div style="font-size:13px;line-height:1.5;">';
+            echo '<strong>Email:</strong> '.esc_html($email !== '' ? $email : '—').' &nbsp; <strong>Phone:</strong> '.esc_html($phone !== '' ? $phone : '—').' &nbsp; <strong>Mobile:</strong> '.esc_html($mobile !== '' ? $mobile : '—').'<br>';
+            echo '<strong>Billing address:</strong> '.esc_html($billing_address !== '' ? $billing_address : '—').' &nbsp; <strong>City:</strong> '.esc_html($city !== '' ? $city : '—').' &nbsp; <strong>Province/State:</strong> '.esc_html($province_state !== '' ? $province_state : '—').' &nbsp; <strong>Postal/Zip:</strong> '.esc_html($postal_zip !== '' ? $postal_zip : '—').'<br>';
+            echo '<strong>Notes:</strong> '.esc_html($customer_notes !== '' ? $customer_notes : '—').'<br>';
+            echo '<strong>Service location note:</strong> '.esc_html(trim($service_site_name . ' ' . $service_site_address . ' ' . $site_city . ' ' . $site_province_state . ' ' . $site_postal_zip . ' ' . $site_notes) !== '' ? trim($service_site_name . ' ' . $service_site_address . ' ' . $site_city . ' ' . $site_province_state . ' ' . $site_postal_zip . ' ' . $site_notes) : '—');
+            echo '</div></td></tr>';
         }
-        echo '</div>';
+        echo '</tbody></table></div>';
     }
     private function build_data_import_dry_run_summary($rows, $headers, $map, $preview_limit = 5) {
         $dry = array('total_rows'=>0,'valid_rows'=>0,'missing_name'=>0,'invalid_email'=>0,'invalid_phone'=>0,'ready'=>0,'skipped'=>0,'duplicates'=>0,'errors'=>0,'rows'=>array(),'issues'=>array(),'preview_rows'=>array(),'preview_limit'=>max(1,(int)$preview_limit));
@@ -33377,7 +33375,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         $state['import_mode'] = $mode;
         update_option($this->get_data_import_state_option_key($company_key), $state);
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_settings_saved','object_type'=>'import','object_id'=>'customer_csv','after_summary'=>'source:'.$source.',mode:'.$mode));
-        $message = $mode === 'basic_customers' ? 'Import settings saved.' : 'Import settings saved. Only customer CSV import is active right now; selected mode is staged for a future release.';
+        $message = 'Import settings saved.';
         $this->redirect_with_message('settings', 'success', $message);
     }
 
@@ -33389,21 +33387,22 @@ private function get_work_order_items_summary_html($work_order_id) {
         $selected_source = sanitize_key((string) ($state['import_source'] ?? 'excel_csv'));
         $source_options = array('excel_csv' => 'Excel / CSV', 'quickbooks' => 'QuickBooks', 'jobber' => 'Jobber', 'servicetitan' => 'ServiceTitan', 'wave' => 'Wave', 'other' => 'Other');
         if (!isset($source_options[$selected_source])) { $selected_source = 'excel_csv'; }
-        ob_start(); echo '<div class="dmx-card"><h3 class="dmx-panel-title">Import Customers from CSV</h3><p>Upload a customer list from your old software or spreadsheet. DoorMatrix will help match the columns, check the customer list, and import the records.</p>';
-        echo '<p style="margin:6px 0 12px;color:#61738b;">Customer import is active now. Invoice, payment, job history, and attachment imports will be added after customer import is stable.</p>';
-        echo '<form method="post" enctype="multipart/form-data">'; wp_nonce_field('dmx_portal_submit','dmx_nonce');
+        ob_start(); echo '<div class="dmx-card"><h3 class="dmx-panel-title">Import Customers from CSV</h3><p>Upload a customer list from your old software or spreadsheet. DoorMatrix will preview your customers before import.</p>';
+                echo '<form method="post" enctype="multipart/form-data">'; wp_nonce_field('dmx_portal_submit','dmx_nonce');
         echo '<input type="hidden" name="dmx_portal_action" value="data_import_upload_csv"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
         echo '<h4>Step 1 — Upload CSV</h4><div class="dmx-form-grid"><div class="dmx-field"><label>Customer CSV file</label><input type="file" name="dmx_customer_csv" accept=".csv,text/csv" required></div><div class="dmx-field"><label>File source (optional)</label><select name="dmx_import_source"><option value="">-- Only for reference --</option>'; foreach ($source_options as $source_key => $source_label) { echo '<option value="'.esc_attr($source_key).'" '.selected($selected_source, $source_key, false).'>'.esc_html($source_label).'</option>'; } echo '</select></div></div><button class="dmx-btn" type="submit">Upload & Preview</button></form>';
-        echo '<form method="post" style="margin-top:10px;">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_clear_session"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import"><button class="dmx-btn dmx-btn-secondary" type="submit">Clear Import Session</button><p style="margin:8px 0 0;color:#61738b;">Clears the uploaded CSV preview, mapping, dry-run results, and import summary. This does not delete customers already imported.</p></form>';
+        echo '<form method="post" style="margin-top:10px;">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_clear_session"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import"><button class="dmx-btn dmx-btn-secondary" type="submit">Start Over</button><p style="margin:8px 0 0;color:#61738b;">Clears the current uploaded CSV preview. This will not delete customers already imported.</p></form>';
         if (!empty($state['headers'])) { echo '<h4>Step 2 — Review Customers</h4><p><strong>File:</strong> '.esc_html((string) ($state['file_name'] ?? 'CSV uploaded')).' &nbsp; <strong>Total customers found:</strong> '.esc_html((string) ($state['row_count'] ?? 0)).'</p><form method="post">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_run_dry_run"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import">';
             $fields=array('customer_company_name','first_name','last_name','contact_name','email','phone','mobile','billing_address','city','province_state','postal_zip','country','customer_notes','customer_number','service_site_name','service_site_address','site_city','site_province_state','site_postal_zip','site_notes');
             $current_map = isset($state['map']) && is_array($state['map']) ? $state['map'] : array();
             $mapping_missing = empty($current_map['customer_company_name']);
-            echo '<details '.($mapping_missing ? 'open' : '').' style="margin:10px 0 12px;"><summary><strong>Advanced: Adjust Column Matching</strong></summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;">';
+            $show_advanced_options = $mapping_missing || (!empty($_GET['dmx_show_advanced']) && sanitize_text_field((string) wp_unslash($_GET['dmx_show_advanced'])) === '1');
+            if (!$show_advanced_options) { echo '<p style="margin:8px 0 12px;"><a href="'.esc_url(add_query_arg(array('dmx_tab'=>'settings','dmx_subtab'=>'settings_data_import','dmx_show_advanced'=>'1'), $this->get_settings_base_url(is_admin()))).'">Advanced options</a></p>'; }
+            echo '<details '.($show_advanced_options ? 'open' : '').' style="margin:10px 0 12px;'.($show_advanced_options ? '' : 'display:none;').'"><summary><strong>Advanced options</strong></summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;">';
             foreach($fields as $f){ echo '<div class="dmx-field" style="margin:0;"><label>'.esc_html(str_replace('_',' ',ucwords($f,'_'))).'</label><select name="dmx_import_map['.esc_attr($f).']"><option value="">-- Not mapped --</option>'; foreach((array)$state['headers'] as $h){ echo '<option value="'.esc_attr($h).'" '.selected((string)($current_map[$f] ?? ''),(string)$h,false).'>'.esc_html($h).'</option>'; } echo '</select></div>'; }
             echo '</div></details>';
-            if ($mapping_missing) { echo '<div class="dmx-message dmx-message-error">Map at least Customer Name (or Company Name) before import.</div>'; }
-            if ($mapping_missing) { echo '<h5>Required field status</h5><p style="margin:4px 0 10px;color:#b91c1c;">Customer / Company Name must be mapped before preview validation.</p>'; }
+            if ($mapping_missing) { echo '<div class="dmx-message dmx-message-error">Choose at least Customer Name (or Company Name) before import.</div>'; }
+            if ($mapping_missing) { echo '<h5>Required field status</h5><p style="margin:4px 0 10px;color:#b91c1c;">Customer / Company Name is required before import.</p>'; }
             $d = isset($state['dry_run']) && is_array($state['dry_run']) ? $state['dry_run'] : $this->build_data_import_dry_run_summary((array) ($state['rows'] ?? array()), (array) $state['headers'], $current_map, 5);
             echo '<div class="dmx-message dmx-message-info"><p style="margin:0;"><strong>Total customers found:</strong> '.esc_html((string)($d['total_rows'] ?? 0)).' &nbsp; <strong>Ready to import:</strong> '.esc_html((string)$d['ready']).' &nbsp; <strong>Duplicates:</strong> '.esc_html((string)$d['duplicates']).' &nbsp; <strong>Needs review:</strong> '.esc_html((string) (($d['invalid_phone'] ?? 0) + ($d['errors'] ?? 0))).' &nbsp; <strong>Skipped:</strong> '.esc_html((string)$d['skipped']).'</p></div>';
             $this->render_data_import_preview_cards($this->build_data_import_preview_rows((array) ($state['rows'] ?? array()), (array) $state['headers'], 5), $current_map, (int) ($state['row_count'] ?? 0));
@@ -33412,7 +33411,8 @@ private function get_work_order_items_summary_html($work_order_id) {
             if (!empty($d['issues'])) { echo '<p><strong>Rows needing review / skipped:</strong></p><ul>'; foreach ((array) $d['issues'] as $issue) { $issue_row = isset($issue['row_number']) ? (int) $issue['row_number'] : 0; $issue_reason = isset($issue['reason']) ? sanitize_text_field((string) $issue['reason']) : ''; echo '<li>Row '.esc_html((string) $issue_row).': '.esc_html($issue_reason !== '' ? $issue_reason : 'Unknown reason').'</li>'; } echo '</ul>'; }
             $has_valid_session = !empty($state['rows']) && !empty($state['headers']) && !empty($current_map['customer_company_name']);
             if (empty($state['summary']) && $has_valid_session && (int) ($d['ready'] ?? 0) > 0) { echo '<form method="post">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_confirm_import"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import"><button class="dmx-btn" type="submit">'.((int)($d['skipped'] ?? 0) > 0 ? 'Import Ready Customers' : 'Import Customers').'</button></form>'; } else if (empty($state['summary'])) { echo '<div class="dmx-message dmx-message-error">No valid customers are ready to import.</div><button class="dmx-btn" type="button" disabled>No valid customers are ready to import.</button>'; } }
-        if (!empty($state['summary'])) { $sum=$state['summary']; $customers_url = add_query_arg(array('dmx_tab' => 'customers'), $this->get_settings_base_url(is_admin())); if (!empty($sum['batch_id'])) { $customers_url = add_query_arg(array('dmx_import_batch_id' => sanitize_text_field((string) $sum['batch_id'])), $customers_url); } echo '<div class="dmx-message dmx-message-success"><h4 style="margin-top:0;">Import Complete</h4><ul><li>Imported customers: '.esc_html((string)$sum['created']).'</li><li>Skipped rows: '.esc_html((string)$sum['skipped']).'</li><li>Duplicates: '.esc_html((string)$sum['duplicates']).'</li><li>Failed rows: '.esc_html((string)$sum['errors']).'</li></ul></div>'; if (!empty($sum['issues']) && is_array($sum['issues'])) { echo '<p><strong>Skipped/failed row summary:</strong></p><ul>'; foreach ((array) $sum['issues'] as $issue) { echo '<li>Row '.esc_html((string) ((int) ($issue['row_number'] ?? 0))).': '.esc_html(sanitize_text_field((string) ($issue['reason'] ?? 'Skipped'))).'</li>'; } echo '</ul>'; } echo '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;"><a class="dmx-btn" href="'.esc_url($customers_url).'">View Imported Customers</a><form method="post" style="margin:0;">'; wp_nonce_field('dmx_portal_submit','dmx_nonce'); echo '<input type="hidden" name="dmx_portal_action" value="data_import_clear_session"><input type="hidden" name="dmx_tab" value="settings"><input type="hidden" name="dmx_subtab" value="settings_data_import"><button class="dmx-btn dmx-btn-secondary" type="submit" name="dmx_import_restart" value="1">Import Another CSV</button></form></div>'; }
+        $recent_batch_id = isset($_GET['dmx_import_batch_id']) ? sanitize_text_field((string) wp_unslash($_GET['dmx_import_batch_id'])) : '';
+        if ($recent_batch_id !== '') { $customers_url = add_query_arg(array('dmx_tab' => 'customers', 'dmx_import_batch_id' => $recent_batch_id), $this->get_settings_base_url(is_admin())); echo '<div style="margin-top:14px;"><a class="dmx-btn dmx-btn-secondary" href="'.esc_url($customers_url).'">View Imported Customers</a></div>'; }
         echo '</div>'; return ob_get_clean();
     }
 
@@ -33437,7 +33437,7 @@ private function get_work_order_items_summary_html($work_order_id) {
         if (!$this->current_user_can_import_customer_data() || $company_key === '') { $this->redirect_with_message($tab,'error','Import blocked.'); }
         $state = get_option($this->get_data_import_state_option_key($company_key), array());
         $map = isset($_POST['dmx_import_map']) && is_array($_POST['dmx_import_map']) ? array_map('sanitize_text_field', wp_unslash($_POST['dmx_import_map'])) : array();
-        if (empty($map['customer_company_name'])) { $this->redirect_with_message($tab,'error','Map Customer Name / Company Name before dry run.'); }
+        if (empty($map['customer_company_name'])) { $this->redirect_with_message($tab,'error','Choose a Customer Name / Company Name column before continuing.'); }
         $preview_limit = isset($_POST['dmx_preview_limit']) ? (int) sanitize_text_field(wp_unslash($_POST['dmx_preview_limit'])) : 5; if (!in_array($preview_limit, array(5,20), true)) { $preview_limit = 5; }
         $rows = isset($state['rows']) && is_array($state['rows']) ? $state['rows'] : array();
         $headers = isset($state['headers']) && is_array($state['headers']) ? $state['headers'] : array();
@@ -33445,14 +33445,14 @@ private function get_work_order_items_summary_html($work_order_id) {
         $state['map'] = $map; $state['dry_run'] = $dry; update_option($this->get_data_import_state_option_key($company_key), $state);
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_mapping_saved','object_type'=>'import','object_id'=>'customer_csv','after_summary'=>'mapped_fields:'.count(array_filter($map))));
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_dry_run','object_type'=>'import','object_id'=>'customer_csv','after_summary'=>'ready:'.$dry['ready'].',skipped:'.$dry['skipped'].',duplicates:'.$dry['duplicates'].',errors:'.$dry['errors']));
-        $this->redirect_with_message('settings','success','Dry run completed.');
+        $this->redirect_with_message('settings','success','Preview updated.');
     }
 
     private function handle_data_import_confirm_import($tab='settings') {
         $company_key = sanitize_key((string) $this->get_current_user_company_key());
         $state = get_option($this->get_data_import_state_option_key($company_key), array());
         if (!$this->current_user_can_import_customer_data() || $company_key === '') { $this->redirect_with_message($tab,'error','Import blocked.'); }
-        if (empty($state['dry_run']['rows']) || (int) ($state['dry_run']['ready'] ?? 0) < 1) { $this->redirect_with_message($tab,'error','No rows are ready to import. Run dry run again after fixing mapping.'); }
+        if (empty($state['dry_run']['rows']) || (int) ($state['dry_run']['ready'] ?? 0) < 1) { $this->redirect_with_message($tab,'error','No rows are ready to import. Review the preview and try again.'); }
         $batch_id = 'dmximp_' . gmdate('YmdHis') . '_' . wp_generate_password(6,false,false);
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_confirmed','object_type'=>'import','object_id'=>$batch_id,'after_summary'=>'rows_ready:'.(int) ($state['dry_run']['ready'] ?? 0)));
         $created=0; $skipped=0; $duplicates=0; $errors=0; $map = isset($state['map']) && is_array($state['map']) ? $state['map'] : array(); $issues = array();
@@ -33499,24 +33499,9 @@ private function get_work_order_items_summary_html($work_order_id) {
         }
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_batch_completed','object_type'=>'import','object_id'=>$batch_id,'after_summary'=>'batch:'.((int) $chunk_index + 1).'/'.count($chunks).',created:'.$created.',skipped:'.$skipped.',duplicates:'.$duplicates.',errors:'.$errors));
         }
-        $preview_customers = array();
-        if ($batch_id !== '') {
-            $imported_ids = get_posts(array('post_type'=>'dm_customer','post_status'=>'publish','posts_per_page'=>20,'fields'=>'ids','orderby'=>'date','order'=>'DESC','meta_query'=>array('relation'=>'AND',array('key'=>'_dmx_company_key','value'=>$company_key),array('key'=>'_dmx_import_batch_id','value'=>$batch_id))));
-            foreach ((array) $imported_ids as $imported_id) {
-                $preview_customers[] = array(
-                    'customer_number' => sanitize_text_field((string) get_post_meta($imported_id, '_dmx_customer_number', true)),
-                    'company_name' => sanitize_text_field((string) get_post_meta($imported_id, '_dmx_company_name', true)),
-                    'contact_name' => trim(sanitize_text_field((string) get_post_meta($imported_id, '_dmx_customer_contact_name', true))),
-                    'email' => sanitize_text_field((string) get_post_meta($imported_id, '_dmx_customer_email', true)),
-                    'phone' => sanitize_text_field((string) get_post_meta($imported_id, '_dmx_customer_phone', true)),
-                    'city' => sanitize_text_field((string) get_post_meta($imported_id, '_dmx_customer_city', true)),
-                    'imported_at' => sanitize_text_field((string) get_post_meta($imported_id, '_dmx_imported_at', true)),
-                );
-            }
-        }
-        $state['summary']=array('total_rows'=>(int) ($state['row_count'] ?? 0),'created'=>$created,'skipped'=>$skipped,'duplicates'=>$duplicates,'errors'=>$errors,'batch_id'=>$batch_id,'issues'=>$issues); $state['imported_customers_preview'] = $preview_customers; update_option($this->get_data_import_state_option_key($company_key),$state);
+        update_option($this->get_data_import_state_option_key($company_key), array());
         $this->add_audit_log_entry(array('company_key'=>$company_key,'action'=>'data_import_completed','object_type'=>'import','object_id'=>$batch_id,'after_summary'=>'created:'.$created.',skipped:'.$skipped.',duplicates:'.$duplicates.',errors:'.$errors.',source:'.sanitize_key((string) ($state['import_source'] ?? 'excel_csv')).',mode:'.sanitize_key((string) ($state['import_mode'] ?? 'basic_customers'))));
-        $this->redirect_with_message('settings','success','Customer import completed.');
+        $this->redirect_with_message('settings','success',$created.' customers imported successfully.', array('dmx_subtab' => 'settings_data_import', 'dmx_import_batch_id' => $batch_id));
     }
 
     private function render_settings_backup_page() {
@@ -33686,7 +33671,7 @@ private function get_work_order_items_summary_html($work_order_id) {
             array('key' => 'settings_documents', 'title' => 'Document Settings', 'desc' => 'Quote and invoice layout visibility, numbering, terms, and branding.', 'color' => '#3498db'),
             array('key' => 'settings_attachments', 'title' => 'Attachments', 'desc' => 'Upload warranty sheets, brochures, spec sheets, and assign them to documents.', 'color' => '#16a085'),
             array('key' => 'settings_backup', 'title' => 'Backup & Recovery', 'desc' => 'View backup status, export company data, download a file index, and submit restore requests.', 'color' => '#2c3e50'),
-            array('key' => 'settings_data_import', 'title' => 'Data Import', 'desc' => 'Import existing customer data from CSV using a guided dry-run wizard.', 'color' => '#1f7a8c'),
+            array('key' => 'settings_data_import', 'title' => 'Data Import', 'desc' => 'Import existing customer data from CSV with a guided preview.', 'color' => '#1f7a8c'),
             array('key' => 'staff', 'title' => 'Manage Team', 'desc' => 'Preview the team setup screen door companies use to add users, assign roles, and manage truck access.', 'color' => '#e67e22'),
         );
         ob_start();
