@@ -18293,15 +18293,114 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
         $_GET = $old_get;
     }
 
+    private function user_requires_pending_email_verification($user_id, $status = null, $email_verified = null, $is_company_owner = null) {
+        $user_id = absint($user_id);
+        if ($user_id <= 0) {
+            return false;
+        }
+        if ($status === null) {
+            $status = (string) get_user_meta($user_id, '_dmx_account_status', true);
+        }
+        if ($email_verified === null) {
+            $email_verified = (string) get_user_meta($user_id, '_dmx_email_verified', true);
+        }
+        if ($is_company_owner === null) {
+            $is_company_owner = ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes');
+        }
+
+        if ($email_verified === 'yes') {
+            return false;
+        }
+
+        if (in_array($status, array('pending_email_verification', 'email_verification_required'), true)) {
+            return true;
+        }
+
+        if ($is_company_owner && in_array($status, array('pending', 'pending_admin_approval'), true)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function maybe_backfill_legacy_email_verification_meta($user_id, $status = null, $email_verified = null) {
+        $user_id = absint($user_id);
+        if ($user_id <= 0) {
+            return;
+        }
+        if ($status === null) {
+            $status = (string) get_user_meta($user_id, '_dmx_account_status', true);
+        }
+        if ($email_verified === null) {
+            $email_verified = (string) get_user_meta($user_id, '_dmx_email_verified', true);
+        }
+        if ($email_verified === 'yes') {
+            return;
+        }
+
+        if ($status === 'approved' || $this->user_has_active_or_trial_company_access($user_id)) {
+            update_user_meta($user_id, '_dmx_email_verified', 'yes');
+        }
+    }
+
+    private function render_logged_in_email_verification_gate($user_id) {
+        $portal_url = $this->get_portal_page_url();
+        ob_start();
+        ?>
+        <div class="dmx-portal-wrap dmx-auth-wrap">
+            <div class="dmx-auth-shell">
+                <div class="dmx-auth-grid">
+                    <section class="dmx-auth-panel" style="max-width:560px;">
+                        <div class="dmx-auth-panel-head">
+                            <h3>Email verification is required before portal access.</h3>
+                            <p>Enter your 6-digit verification code sent by DoorMatrix.</p>
+                        </div>
+                        <form method="post" class="dmx-auth-form">
+                            <?php wp_nonce_field('dmx_public_verify_email', 'dmx_public_nonce'); ?>
+                            <input type="hidden" name="dmx_public_action" value="verify_company_email_code">
+                            <input type="hidden" name="dmx_verify_user_id" value="<?php echo esc_attr(absint($user_id)); ?>">
+                            <input type="hidden" name="dmx_auth" value="verify">
+                            <div class="dmx-field">
+                                <label>Verification Code</label>
+                                <input type="text" name="dmx_email_verification_code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required>
+                            </div>
+                            <button type="submit" class="dmx-auth-submit">Verify Email</button>
+                        </form>
+                        <form method="post" class="dmx-auth-form" style="margin-top:10px;">
+                            <?php wp_nonce_field('dmx_public_verify_email', 'dmx_public_nonce'); ?>
+                            <input type="hidden" name="dmx_public_action" value="resend_company_email_code">
+                            <input type="hidden" name="dmx_verify_user_id" value="<?php echo esc_attr(absint($user_id)); ?>">
+                            <input type="hidden" name="dmx_auth" value="verify">
+                            <button type="submit" class="dmx-auth-submit">Resend Code</button>
+                        </form>
+                        <p style="margin-top:12px;"><a href="<?php echo esc_url(wp_logout_url($portal_url)); ?>">Log out</a></p>
+                    </section>
+                </div>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
     public function render_portal_shortcode() {
         if (!is_user_logged_in()) { return $this->render_login_required(); }
 
         $user_id = get_current_user_id();
         if ($user_id > 0 && !current_user_can('manage_options')) {
-            if ((string) get_user_meta($user_id, '_dmx_email_verified', true) !== 'yes') {
-                return '<div class="dmx-portal-wrap"><div class="dmx-message dmx-message-warning">Email verification is required before portal access. Enter your 6-digit verification code sent by DoorMatrix.</div></div>';
+            $status = (string) get_user_meta($user_id, '_dmx_account_status', true);
+            $email_verified = (string) get_user_meta($user_id, '_dmx_email_verified', true);
+            $is_company_owner = ((string) get_user_meta($user_id, '_dmx_is_company_owner', true) === 'yes');
+
+            if ($this->user_requires_pending_email_verification($user_id, $status, $email_verified, $is_company_owner)) {
+                if (current_user_can('manage_options')) {
+                    error_log('DoorMatrix portal verification gate: user_id=' . $user_id . ' company_key=' . sanitize_key((string) get_user_meta($user_id, '_dmx_company_key', true)) . ' status=' . $status . ' verified=' . $email_verified . ' blocked=email_verification_required');
+                }
+                return $this->render_logged_in_email_verification_gate($user_id);
             }
-            if ((string) get_user_meta($user_id, '_dmx_account_status', true) !== 'approved') {
+
+            $this->maybe_backfill_legacy_email_verification_meta($user_id, $status, $email_verified);
+
+            if ($status !== 'approved') {
                 return '<div class="dmx-portal-wrap"><div class="dmx-message dmx-message-warning">Your account is pending DoorMatrix admin approval.</div></div>';
             }
         }
