@@ -6751,6 +6751,12 @@ class DoorMatrix_Company_Portal {
             return;
         }
 
+        global $pagenow;
+        $download_action = sanitize_text_field(wp_unslash($_REQUEST['action'] ?? ''));
+        if ($pagenow === 'admin-post.php' && $download_action === 'dmx_download_attachment') {
+            return;
+        }
+
         if (current_user_can('manage_options')) {
             return;
         }
@@ -8962,7 +8968,7 @@ class DoorMatrix_Company_Portal {
             return false;
         }
         $attachment_url = (string) wp_get_attachment_url($attachment_id);
-        foreach (array('_dmx_quote_documents', '_dmx_document_photos') as $meta_key) {
+        foreach (array('_dmx_quote_documents', '_dmx_document_photos', '_dmx_customer_files') as $meta_key) {
             $rows = get_post_meta($parent_id, $meta_key, true);
             if (!is_array($rows)) {
                 continue;
