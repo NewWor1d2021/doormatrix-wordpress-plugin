@@ -8507,6 +8507,9 @@ class DoorMatrix_Company_Portal {
             case 'update_customer':
                 $this->update_customer($tab);
                 break;
+            case 'add_customer_service_location':
+                $this->add_customer_service_location($tab);
+                break;
             case 'delete_customer':
                 $this->delete_customer($tab);
                 break;
@@ -12633,6 +12636,27 @@ private function mark_work_order_scheduled_complete($tab) {
         $this->add_audit_log_entry(array('company_key' => $this->get_current_user_company_key(), 'action' => 'customer_update', 'object_type' => 'customer', 'object_id' => (string) $customer_id, 'object_label' => $title));
 
         $this->redirect_with_message($tab, 'success', 'Customer updated successfully.');
+    }
+    private function add_customer_service_location($tab) {
+        if (!$this->current_user_can_manage_customers()) {
+            $this->redirect_with_message($tab, 'error', 'You do not have permission to add service locations.');
+        }
+        $customer_id = absint($_POST['customer_id'] ?? 0);
+        if ($customer_id <= 0 || get_post_type($customer_id) !== 'dm_customer' || !$this->post_matches_current_company($customer_id)) {
+            $this->redirect_with_message($tab, 'error', 'Customer record could not be found.');
+        }
+        $site_name = sanitize_text_field($_POST['service_site_name'] ?? '');
+        $address = sanitize_text_field($_POST['service_site_address'] ?? '');
+        $city = sanitize_text_field($_POST['service_site_city'] ?? '');
+        $province_state = sanitize_text_field($_POST['service_site_province_state'] ?? '');
+        $postal_zip = sanitize_text_field($_POST['service_site_postal_zip'] ?? '');
+        $notes = sanitize_textarea_field($_POST['service_site_notes'] ?? '');
+        $status = sanitize_text_field($_POST['service_site_status'] ?? '');
+        if ($site_name === '' && $address === '' && $city === '' && $province_state === '' && $postal_zip === '' && $notes === '' && $status === '') {
+            $this->redirect_with_message($tab, 'error', 'Add at least one service location field.');
+        }
+        $this->add_customer_history_entry($customer_id, array('type' => 'service_location', 'type_label' => 'Service Location', 'site_name' => $site_name, 'address' => $address, 'city' => $city, 'province_state' => $province_state, 'postal_zip' => $postal_zip, 'notes' => $notes, 'status' => $status, 'summary' => trim($site_name . ' ' . $address), 'created_at' => current_time('mysql')));
+        $this->redirect_with_message($tab, 'success', 'Service location added.');
     }
 
     private function delete_customer($tab) {
@@ -23411,6 +23435,14 @@ private function render_inspections_tab($is_admin = false) {
             'country' => get_post_meta($customer_id, '_dmx_customer_country', true),
         );
         $history_entries = $this->get_customer_history_entries($customer_id);
+        $service_locations = $this->get_customer_service_locations($customer_id);
+        $general_history_entries = array();
+        foreach ((array) $history_entries as $history_entry) {
+            if (!is_array($history_entry) || (string) ($history_entry['type'] ?? '') === 'service_location' || (string) ($history_entry['type'] ?? '') === 'file') {
+                continue;
+            }
+            $general_history_entries[] = $history_entry;
+        }
         $file_entries = $this->get_customer_history_file_entries($customer_id);
         ob_start(); ?>
         <div class="dmx-form-card dmx-compact-card">
@@ -23432,14 +23464,29 @@ private function render_inspections_tab($is_admin = false) {
             <div class="dmx-form-grid-3 dmx-compact-grid"><div class="dmx-field dmx-compact-field"><label>Billing Address</label><div class="dmx-readonly-value"><?php echo esc_html($meta['address_1'] ?: '—'); ?></div></div><div class="dmx-field dmx-compact-field"><label>City</label><div class="dmx-readonly-value"><?php echo esc_html($meta['city'] ?: '—'); ?></div></div><div class="dmx-field dmx-compact-field"><label>Province/State</label><div class="dmx-readonly-value"><?php echo esc_html($meta['province'] ?: '—'); ?></div></div></div>
             <div class="dmx-form-grid-3 dmx-compact-grid"><div class="dmx-field dmx-compact-field"><label>Postal/Zip</label><div class="dmx-readonly-value"><?php echo esc_html($meta['postal_code'] ?: '—'); ?></div></div><div class="dmx-field dmx-compact-field"><label>Country</label><div class="dmx-readonly-value"><?php echo esc_html($meta['country'] ?: '—'); ?></div></div></div>
             <div class="dmx-field dmx-compact-field"><label>Customer Notes</label><div class="dmx-readonly-value"><?php echo esc_html((string) (get_post_meta($customer_id, '_dmx_customer_notes', true) ?: get_post_field('post_content', $customer_id)) ?: '—'); ?></div></div>
-            <h4 class="dmx-section-title">Customer History</h4>
-            <?php if (!empty($history_entries)) : foreach ((array) $history_entries as $history_entry) : ?>
-                <?php if (!empty($history_entry['type']) && (string) $history_entry['type'] === 'file') { continue; } ?>
+            <h4 class="dmx-section-title">Service Locations</h4>
+            <?php if (!empty($service_locations)) : foreach ((array) $service_locations as $location) : ?>
                 <div class="dmx-card" style="margin:0 0 10px;padding:12px;">
-                    <strong><?php echo esc_html((string) ($history_entry['type_label'] ?? 'History')); ?></strong>
-                    <div style="margin-top:6px;font-size:13px;color:#334155;"><?php echo esc_html((string) ($history_entry['summary'] ?? '')); ?></div>
+                    <div><strong>Site Name:</strong> <?php echo esc_html((string) ($location['site_name'] ?: '—')); ?></div>
+                    <div><strong>Address:</strong> <?php echo esc_html((string) ($location['address'] ?: '—')); ?></div>
+                    <div><strong>City:</strong> <?php echo esc_html((string) ($location['city'] ?: '—')); ?></div>
+                    <div><strong>Province/State:</strong> <?php echo esc_html((string) ($location['province_state'] ?: '—')); ?></div>
+                    <div><strong>Postal/Zip:</strong> <?php echo esc_html((string) ($location['postal_zip'] ?: '—')); ?></div>
+                    <?php if ((string) ($location['notes'] ?? '') !== '') : ?><div><strong>Notes:</strong> <?php echo esc_html((string) $location['notes']); ?></div><?php endif; ?>
                 </div>
-            <?php endforeach; else : ?><div class="dmx-readonly-value">No customer history entries yet.</div><?php endif; ?>
+            <?php endforeach; else : ?><div class="dmx-readonly-value">No service locations saved yet.</div><?php endif; ?>
+            <?php if ($can_manage_customer) : ?>
+                <form method="post" style="margin:10px 0;">
+                    <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
+                    <input type="hidden" name="dmx_portal_action" value="add_customer_service_location"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>">
+                    <div class="dmx-form-grid-3 dmx-compact-grid"><div class="dmx-field dmx-compact-field"><label>Site Name</label><input type="text" name="service_site_name"></div><div class="dmx-field dmx-compact-field"><label>Address</label><input type="text" name="service_site_address"></div><div class="dmx-field dmx-compact-field"><label>City</label><input type="text" name="service_site_city"></div></div>
+                    <div class="dmx-form-grid-3 dmx-compact-grid"><div class="dmx-field dmx-compact-field"><label>Province/State</label><input type="text" name="service_site_province_state"></div><div class="dmx-field dmx-compact-field"><label>Postal/Zip</label><input type="text" name="service_site_postal_zip"></div><div class="dmx-field dmx-compact-field"><label>Status (optional)</label><input type="text" name="service_site_status"></div></div>
+                    <div class="dmx-field dmx-compact-field"><label>Notes</label><input type="text" name="service_site_notes"></div>
+                    <button class="dmx-btn dmx-btn-secondary" type="submit">Add Service Location</button>
+                </form>
+            <?php endif; ?>
+            <?php if (!empty($general_history_entries)) : ?><h4 class="dmx-section-title">Customer History</h4>
+            <?php foreach ($general_history_entries as $history_entry) : ?><div class="dmx-card" style="margin:0 0 10px;padding:12px;"><strong><?php echo esc_html((string) ($history_entry['type_label'] ?? 'History')); ?></strong><div style="margin-top:6px;font-size:13px;color:#334155;"><?php echo esc_html((string) ($history_entry['summary'] ?? '')); ?></div></div><?php endforeach; endif; ?>
             <h4 class="dmx-section-title">Customer Files</h4>
             <?php if ($can_manage_customer) : ?><form method="post" enctype="multipart/form-data" style="margin-bottom:10px;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="upload_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="file" name="dmx_customer_history_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt" required><button class="dmx-btn dmx-btn-secondary" type="submit">Upload File</button></form><?php endif; ?>
             <?php if (!empty($file_entries)) : ?><ul><?php foreach ((array) $file_entries as $file_index => $file_entry) : ?><li><?php $file_attachment_id = (int) ($file_entry['attachment_id'] ?? 0); $view_url = $this->get_secure_attachment_download_url($file_attachment_id, $customer_id, 'view'); $download_url = $this->get_secure_attachment_download_url($file_attachment_id, $customer_id, 'download'); ?><?php echo esc_html((string) ($file_entry['label'] ?? "File")); ?> — <?php echo esc_html(!empty($file_entry['uploaded_at']) ? date_i18n(get_option('date_format'), strtotime((string) $file_entry['uploaded_at'])) : ""); ?> — <a href="<?php echo esc_url($view_url); ?>" target="_blank" rel="noopener">View</a> — <a href="<?php echo esc_url($download_url); ?>">Download</a><?php if ($can_manage_customer) : ?> — <form method="post" style="display:inline;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="delete_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="attachment_id" value="<?php echo esc_attr((string) absint($file_entry['attachment_id'] ?? 0)); ?>"><input type="hidden" name="file_index" value="<?php echo esc_attr((string) $file_index); ?>"><button class="dmx-btn dmx-btn-secondary" type="submit" onclick="return confirm('Delete this file?');">Delete</button></form><?php endif; ?></li><?php endforeach; ?></ul><?php else : ?><div class="dmx-readonly-value">No customer files uploaded yet.</div><?php endif; ?>
@@ -23454,6 +23501,24 @@ private function render_inspections_tab($is_admin = false) {
         $history = $this->get_customer_history_entries($customer_id);
         $history[] = $entry;
         update_post_meta((int) $customer_id, '_dmx_customer_history_entries', $history);
+    }
+    private function get_customer_service_locations($customer_id) {
+        $history_entries = $this->get_customer_history_entries($customer_id);
+        $locations = array();
+        foreach ((array) $history_entries as $entry) {
+            if (!is_array($entry) || (string) ($entry['type'] ?? '') !== 'service_location') {
+                continue;
+            }
+            $site_name = sanitize_text_field((string) ($entry['site_name'] ?? ''));
+            $address = sanitize_text_field((string) ($entry['address'] ?? ''));
+            $city = sanitize_text_field((string) ($entry['city'] ?? ''));
+            $province_state = sanitize_text_field((string) ($entry['province_state'] ?? ''));
+            $postal_zip = sanitize_text_field((string) ($entry['postal_zip'] ?? ''));
+            $notes = sanitize_textarea_field((string) ($entry['notes'] ?? ''));
+            $status = sanitize_text_field((string) ($entry['status'] ?? ''));
+            $locations[] = array('site_name' => $site_name, 'address' => $address, 'city' => $city, 'province_state' => $province_state, 'postal_zip' => $postal_zip, 'notes' => $notes, 'status' => $status);
+        }
+        return $locations;
     }
     private function get_customer_history_file_entries($customer_id) {
         $stored_files = get_post_meta((int) $customer_id, '_dmx_customer_files', true);
@@ -25909,6 +25974,7 @@ private function render_inspections_tab($is_admin = false) {
                 'address_summary' => $address_summary,
                 'attention' => $name,
                 'description' => $address_summary,
+                'service_locations' => $this->get_customer_service_locations($post->ID),
             );
         }
 
