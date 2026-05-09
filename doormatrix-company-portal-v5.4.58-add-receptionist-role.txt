@@ -8825,9 +8825,10 @@ class DoorMatrix_Company_Portal {
         update_post_meta($attachment_id, '_dmx_uploaded_at', current_time('mysql'));
     }
 
-    private function get_secure_attachment_download_url($attachment_id, $parent_post_id) {
+    private function get_secure_attachment_download_url($attachment_id, $parent_post_id, $mode = 'download') {
         $attachment_id = (int) $attachment_id;
         $parent_post_id = (int) $parent_post_id;
+        $mode = sanitize_key((string) $mode) === 'view' ? 'view' : 'download';
         if ($attachment_id <= 0 || $parent_post_id <= 0) {
             return '';
         }
@@ -8835,6 +8836,7 @@ class DoorMatrix_Company_Portal {
             'action' => 'dmx_download_attachment',
             'attachment_id' => $attachment_id,
             'parent_id' => $parent_post_id,
+            'mode' => $mode,
             '_wpnonce' => wp_create_nonce('dmx_download_attachment_' . $attachment_id . '_' . $parent_post_id),
         ), admin_url('admin-post.php'));
     }
@@ -9002,6 +9004,8 @@ class DoorMatrix_Company_Portal {
         $attachment_id = absint($_GET['attachment_id'] ?? 0);
         $parent_id = absint($_GET['parent_id'] ?? 0);
         $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? ''));
+        $mode = sanitize_key((string) ($_GET['mode'] ?? 'download'));
+        $mode = $mode === 'view' ? 'view' : 'download';
         if ($attachment_id <= 0 || $parent_id <= 0 || !wp_verify_nonce($nonce, 'dmx_download_attachment_' . $attachment_id . '_' . $parent_id)) {
             wp_die(esc_html__('File could not be opened.', 'doormatrix'));
         }
@@ -9036,11 +9040,18 @@ class DoorMatrix_Company_Portal {
         if ($mime === '') {
             $mime = 'application/octet-stream';
         }
-        $this->add_audit_log_entry(array('company_key' => $attachment_company_key !== '' ? $attachment_company_key : $current_company_key, 'action' => 'attachment_download_success', 'object_type' => 'attachment', 'object_id' => (string) $attachment_id, 'after_summary' => 'parent:' . $parent_id));
+        $previewable_mimes = array('image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'text/plain', 'text/csv');
+        $is_previewable = in_array(strtolower((string) $mime), $previewable_mimes, true);
+        if ($mode === 'view' && !$is_previewable) {
+            $mode = 'download';
+        }
+        $action = $mode === 'view' ? 'attachment_view_success' : 'attachment_download_success';
+        $this->add_audit_log_entry(array('company_key' => $attachment_company_key !== '' ? $attachment_company_key : $current_company_key, 'action' => $action, 'object_type' => 'attachment', 'object_id' => (string) $attachment_id, 'after_summary' => 'parent:' . $parent_id));
         nocache_headers();
         header('Content-Description: File Transfer');
         header('Content-Type: ' . $mime);
-        header('Content-Disposition: attachment; filename="' . sanitize_file_name($filename) . '"');
+        header('X-Content-Type-Options: nosniff');
+        header('Content-Disposition: ' . ($mode === 'view' ? 'inline' : 'attachment') . '; filename="' . sanitize_file_name($filename) . '"');
         header('Content-Length: ' . filesize($file_path));
         readfile($file_path);
         exit;
@@ -23334,7 +23345,7 @@ private function render_inspections_tab($is_admin = false) {
             <?php endforeach; else : ?><div class="dmx-readonly-value">No customer history entries yet.</div><?php endif; ?>
             <h4 class="dmx-section-title">Customer Files</h4>
             <?php if ($can_manage_customer) : ?><form method="post" enctype="multipart/form-data" style="margin-bottom:10px;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="upload_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="file" name="dmx_customer_history_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt" required><button class="dmx-btn dmx-btn-secondary" type="submit">Upload File</button></form><?php endif; ?>
-            <?php if (!empty($file_entries)) : ?><ul><?php foreach ((array) $file_entries as $file_index => $file_entry) : ?><li><?php echo esc_html((string) ($file_entry['label'] ?? "File")); ?> — <?php echo esc_html(!empty($file_entry['uploaded_at']) ? date_i18n(get_option('date_format'), strtotime((string) $file_entry['uploaded_at'])) : ""); ?> — <a href="<?php echo esc_url($this->get_secure_attachment_download_url((int) $file_entry['attachment_id'], $customer_id)); ?>">View / Download</a><?php if ($can_manage_customer) : ?> — <form method="post" style="display:inline;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="delete_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="attachment_id" value="<?php echo esc_attr((string) absint($file_entry['attachment_id'] ?? 0)); ?>"><input type="hidden" name="file_index" value="<?php echo esc_attr((string) $file_index); ?>"><button class="dmx-btn dmx-btn-secondary" type="submit" onclick="return confirm('Delete this file?');">Delete</button></form><?php endif; ?></li><?php endforeach; ?></ul><?php else : ?><div class="dmx-readonly-value">No customer files uploaded yet.</div><?php endif; ?>
+            <?php if (!empty($file_entries)) : ?><ul><?php foreach ((array) $file_entries as $file_index => $file_entry) : ?><li><?php $file_attachment_id = (int) ($file_entry['attachment_id'] ?? 0); $view_url = $this->get_secure_attachment_download_url($file_attachment_id, $customer_id, 'view'); $download_url = $this->get_secure_attachment_download_url($file_attachment_id, $customer_id, 'download'); ?><?php echo esc_html((string) ($file_entry['label'] ?? "File")); ?> — <?php echo esc_html(!empty($file_entry['uploaded_at']) ? date_i18n(get_option('date_format'), strtotime((string) $file_entry['uploaded_at'])) : ""); ?> — <a href="<?php echo esc_url($view_url); ?>" target="_blank" rel="noopener">View</a> — <a href="<?php echo esc_url($download_url); ?>">Download</a><?php if ($can_manage_customer) : ?> — <form method="post" style="display:inline;"><?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?><input type="hidden" name="dmx_portal_action" value="delete_customer_history_file"><input type="hidden" name="dmx_tab" value="customers"><input type="hidden" name="customer_id" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="dmx_view_customer" value="<?php echo esc_attr((string) $customer_id); ?>"><input type="hidden" name="attachment_id" value="<?php echo esc_attr((string) absint($file_entry['attachment_id'] ?? 0)); ?>"><input type="hidden" name="file_index" value="<?php echo esc_attr((string) $file_index); ?>"><button class="dmx-btn dmx-btn-secondary" type="submit" onclick="return confirm('Delete this file?');">Delete</button></form><?php endif; ?></li><?php endforeach; ?></ul><?php else : ?><div class="dmx-readonly-value">No customer files uploaded yet.</div><?php endif; ?>
             <?php if (current_user_can('manage_options')) : $last_upload_error = get_option('_dmx_last_customer_file_upload_error', array()); if (!empty($last_upload_error) && is_array($last_upload_error)) : ?><details style="margin-top:12px;"><summary><strong>Advanced Upload Debug</strong></summary><div class="dmx-readonly-value" style="margin-top:8px;"><pre style="white-space:pre-wrap;word-break:break-word;"><?php echo esc_html(wp_json_encode($last_upload_error, JSON_PRETTY_PRINT)); ?></pre></div></details><?php endif; endif; ?>
         </div>
         <?php return ob_get_clean();
