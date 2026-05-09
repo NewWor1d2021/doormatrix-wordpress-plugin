@@ -14494,7 +14494,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                 $content = $this->render_inspections_tab(true);
                 break;
             case 'calculators':
-                $content = $this->render_calculators_tab(true);
+                $content = $this->render_calculators_tab_safe(true);
                 break;
             case 'customers':
                 $content = method_exists($this, 'render_customers_tab') ? $this->render_customers_tab(true) : $this->render_admin_module_preview_fallback('Customers');
@@ -18577,7 +18577,7 @@ private function render_admin_standalone_inspections_preview_page($mode = 'menu'
                                 echo $this->render_subcontractors_section($is_admin);
                                 break;
                             case 'calculators':
-                                echo $this->render_calculators_tab($is_admin);
+                                echo $this->render_calculators_tab_safe($is_admin);
                                 break;
                             case 'settings':
                                 echo $this->render_settings_section($is_admin);
@@ -27082,6 +27082,35 @@ private function render_inspections_tab($is_admin = false) {
         </div>
         <?php
         return ob_get_clean();
+    }
+
+
+    private function render_calculators_tab_safe($is_admin = false) {
+        try {
+            return $this->render_calculators_tab($is_admin);
+        } catch (Throwable $e) {
+            $this->log_tools_render_error($e, 'calculators');
+
+            return '<div class="dmx-message dmx-message-error">Tools could not load. Please contact DoorMatrix support.</div>';
+        }
+    }
+
+    private function log_tools_render_error(Throwable $e, $tab = 'calculators') {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $entry = array(
+            'timestamp' => current_time('mysql'),
+            'user_id' => get_current_user_id(),
+            'company_key' => (string) $this->get_current_user_company_key(),
+            'tab' => sanitize_key((string) $tab),
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => (int) $e->getLine(),
+        );
+
+        error_log('DoorMatrix Tools Error: ' . wp_json_encode($entry));
     }
 
 private function render_calculators_tab($is_admin = false) {
