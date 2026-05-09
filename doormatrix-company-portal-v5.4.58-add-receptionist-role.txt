@@ -27032,58 +27032,9 @@ private function render_inspections_tab($is_admin = false) {
     }
 
     private function render_calculator_tool_placeholder($tool_key, $tool, $base_url, $inspection_url) {
-        $title = isset($tool['title']) ? (string) $tool['title'] : 'Calculator Tool';
-        $summary = isset($tool['summary']) ? (string) $tool['summary'] : 'Calculator workflow preview.';
-
-        ob_start();
-        ?>
-        <div class="dmx-calculator-native-screen">
-            <style>
-                .dmx-calculator-native-screen{color:#10233d;}
-                .dmx-calculator-switch{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 20px;}
-                .dmx-calculator-switch a{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;border-radius:999px;text-decoration:none;font-size:13px;font-weight:900;border:1px solid #d7e4f0;background:#eef4fa;color:#173b68;}
-                .dmx-calculator-switch a.active{background:#173b68;border-color:#173b68;color:#fff;box-shadow:0 10px 22px rgba(15,39,74,.12);}
-                .dmx-calculator-tool-panel{background:#fff;border:1px solid #dce8f3;border-radius:22px;padding:24px;box-shadow:0 12px 28px rgba(8,28,51,.06);}
-                .dmx-calculator-tool-panel h2{margin:0 0 8px;color:#0c2340;font-size:30px;font-weight:900;}
-                .dmx-calculator-tool-panel p{margin:0 0 18px;color:#61738b;font-size:15px;line-height:1.55;}
-                .dmx-calculator-demo-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:18px;}
-                .dmx-calculator-demo-form label{display:grid;gap:7px;font-weight:900;color:#0c2340;font-size:13px;}
-                .dmx-calculator-demo-form input,.dmx-calculator-demo-form select{min-height:48px;border:1px solid #dce8f3;border-radius:14px;padding:10px 12px;color:#10233d;background:#fff;}
-                .dmx-calculator-action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;}
-                .dmx-calculator-btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:14px;background:#0c3b70;color:#fff;font-weight:900;text-decoration:none;border:0;}
-                .dmx-calculator-btn.secondary{background:#eef4fb;color:#0c2340;}
-                @media(max-width:900px){.dmx-calculator-demo-form{grid-template-columns:1fr;}}
-            </style>
-
-            <div class="dmx-calculator-switch">
-                <a class="active" href="<?php echo esc_url($base_url); ?>">Calculator Tools</a>
-                <a href="<?php echo esc_url($inspection_url); ?>">Inspection Forms</a>
-            </div>
-
-            <div class="dmx-calculator-tool-panel">
-                <h2><?php echo esc_html($title); ?></h2>
-                <p><?php echo esc_html($summary); ?></p>
-                <p>This is a safe DoorMatrix preview panel for the selected calculator. The full calculation engine can be connected in the next pass without breaking the Tools menu.</p>
-
-                <div class="dmx-calculator-demo-form">
-                    <label>Door Width<input type="text" placeholder="e.g. 16 ft"></label>
-                    <label>Door Height<input type="text" placeholder="e.g. 14 ft"></label>
-                    <label>Door Weight<input type="text" placeholder="e.g. 425 lb"></label>
-                    <label>Drum / Lift Type<select><option>Standard Lift</option><option>High Lift</option><option>Vertical Lift</option><option>Low Headroom</option></select></label>
-                    <label>Spring Inside Diameter<input type="text" placeholder="e.g. 2 inch"></label>
-                    <label>Cycle Target<select><option>10,000</option><option>25,000</option><option>50,000</option><option>100,000</option></select></label>
-                </div>
-
-                <div class="dmx-calculator-action-row">
-                    <button type="button" class="dmx-calculator-btn">Preview Calculate</button>
-                    <a class="dmx-calculator-btn secondary" href="<?php echo esc_url($base_url); ?>">Back to Calculator Tools</a>
-                </div>
-            </div>
-        </div>
-        <?php
-        return ob_get_clean();
+        unset($tool_key, $tool, $base_url, $inspection_url);
+        return '';
     }
-
 
     private function render_calculators_tab_safe($is_admin = false) {
         try {
@@ -27096,10 +27047,6 @@ private function render_inspections_tab($is_admin = false) {
     }
 
     private function log_tools_render_error(Throwable $e, $tab = 'calculators') {
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-
         $entry = array(
             'timestamp' => current_time('mysql'),
             'user_id' => get_current_user_id(),
@@ -27113,233 +27060,23 @@ private function render_inspections_tab($is_admin = false) {
         error_log('DoorMatrix Tools Error: ' . wp_json_encode($entry));
     }
 
-private function render_calculators_tab($is_admin = false) {
-        $tool = sanitize_key((string) ($_GET['dmx_tool'] ?? ''));
-        $base_url = $is_admin
-            ? admin_url('admin.php?page=doormatrix-preview-tools')
-            : $this->portal_url(array('dmx_tab' => 'calculators'));
-
-        $inspection_url = $is_admin
-            ? admin_url('admin.php?page=doormatrix-preview-inspections')
-            : $this->portal_url(array('dmx_tab' => 'inspections'));
-
-        $tools = array(
-            'spring_builder' => array(
-                'title' => 'Spring Builder',
-                'summary' => 'Estimate spring size from door dimensions, weight, drum, lift type, and cycle target.',
-                'kicker' => 'SPR',
-                'class' => 'blue',
-            ),
-            'spring_conversion' => array(
-                'title' => 'Spring Conversion',
-                'summary' => 'Use existing spring measurements to compare replacement direction and matched options.',
-                'kicker' => 'CON',
-                'class' => 'orange',
-            ),
-            'ippt' => array(
-                'title' => 'Springs by IPPT',
-                'summary' => 'Search likely spring options by target IPPT, spring ID, quantity, and cycle target.',
-                'kicker' => 'IPPT',
-                'class' => 'purple',
-            ),
-            'weight' => array(
-                'title' => 'Weight Calculator',
-                'summary' => 'Calculate door weight from measured spring, drum, and lift inputs.',
-                'kicker' => 'WGT',
-                'class' => 'teal',
-            ),
-            'cable_length' => array(
-                'title' => 'Cable Length',
-                'summary' => 'Estimate finished cable length and recommended cable diameter from lift type and drum.',
-                'kicker' => 'CAB',
-                'class' => 'slate',
-            ),
-        );
-
-        if (isset($tools[$tool])) {
-            return $this->render_calculator_tool_placeholder($tool, $tools[$tool], $base_url, $inspection_url);
-        }
+    private function render_calculators_tab($is_admin = false) {
+        unset($is_admin);
+        $markup = $this->get_remote_calculator_markup();
 
         ob_start();
         ?>
-        <div class="dmx-calculator-native-screen">
-            <style>
-                .dmx-calculator-native-screen {
-                    color: #10233d;
-                }
-
-                .dmx-calculator-native-head {
-                    margin: 0 0 20px;
-                }
-
-                .dmx-calculator-native-head h2 {
-                    margin: 0 0 8px;
-                    color: #0c2340;
-                    font-size: 32px;
-                    font-weight: 900;
-                }
-
-                .dmx-calculator-native-head p {
-                    margin: 0;
-                    color: #61738b;
-                    font-size: 16px;
-                    line-height: 1.55;
-                }
-
-                .dmx-calculator-switch {
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: 10px;
-                    margin: 0 0 20px;
-                }
-
-                .dmx-calculator-switch a {
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    min-height: 42px;
-                    padding: 0 16px;
-                    border-radius: 999px;
-                    text-decoration: none;
-                    font-size: 13px;
-                    font-weight: 900;
-                    border: 1px solid #d7e4f0;
-                    background: #eef4fa;
-                    color: #173b68;
-                }
-
-                .dmx-calculator-switch a.active {
-                    background: #173b68;
-                    border-color: #173b68;
-                    color: #fff;
-                    box-shadow: 0 10px 22px rgba(15, 39, 74, .12);
-                }
-
-                .dmx-calculator-card-grid {
-                    display: grid;
-                    grid-template-columns: repeat(5, minmax(0, 1fr));
-                    gap: 16px;
-                    align-items: stretch;
-                }
-
-                .dmx-calculator-card {
-                    min-height: 300px;
-                    border-radius: 22px;
-                    padding: 22px;
-                    text-decoration: none;
-                    color: #fff;
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: flex-end;
-                    box-shadow: 0 18px 36px rgba(8, 28, 51, .14);
-                    position: relative;
-                    overflow: hidden;
-                }
-
-                .dmx-calculator-card:before {
-                    content: "";
-                    position: absolute;
-                    inset: 0;
-                    background-image:
-                        linear-gradient(rgba(255,255,255,.055) 1px, transparent 1px),
-                        linear-gradient(90deg, rgba(255,255,255,.055) 1px, transparent 1px);
-                    background-size: 24px 24px;
-                    opacity: .65;
-                }
-
-                .dmx-calculator-card > * {
-                    position: relative;
-                    z-index: 1;
-                }
-
-                .dmx-calculator-card .kicker {
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    width: 58px;
-                    height: 58px;
-                    border-radius: 16px;
-                    background: rgba(255,255,255,.18);
-                    color: #fff;
-                    font-weight: 900;
-                    margin-bottom: auto;
-                    letter-spacing: .04em;
-                }
-
-                .dmx-calculator-card h3 {
-                    margin: 90px 0 10px;
-                    color: #fff;
-                    font-size: 25px;
-                    line-height: 1.05;
-                    font-weight: 900;
-                }
-
-                .dmx-calculator-card p {
-                    margin: 0;
-                    color: rgba(255,255,255,.84);
-                    font-size: 14px;
-                    line-height: 1.5;
-                }
-
-                .dmx-calculator-card.blue { background: linear-gradient(135deg,#1d4ed8,#1e3a8a); }
-                .dmx-calculator-card.orange { background: linear-gradient(135deg,#f59e0b,#d97706); }
-                .dmx-calculator-card.purple { background: linear-gradient(135deg,#7c3aed,#4f46e5); }
-                .dmx-calculator-card.teal { background: linear-gradient(135deg,#0f766e,#115e59); }
-                .dmx-calculator-card.slate { background: linear-gradient(135deg,#64748b,#334155); }
-
-                .dmx-calculator-note {
-                    margin-top: 20px;
-                    padding: 14px 16px;
-                    border-radius: 14px;
-                    background: #f8fbff;
-                    border: 1px solid #d9e8f4;
-                    color: #4f6480;
-                    font-size: 13px;
-                    line-height: 1.6;
-                }
-
-                @media (max-width: 1350px) {
-                    .dmx-calculator-card-grid {
-                        grid-template-columns: repeat(3, minmax(0, 1fr));
-                    }
-                }
-
-                @media (max-width: 900px) {
-                    .dmx-calculator-card-grid {
-                        grid-template-columns: repeat(2, minmax(0, 1fr));
-                    }
-                }
-
-                @media (max-width: 620px) {
-                    .dmx-calculator-card-grid {
-                        grid-template-columns: 1fr;
-                    }
-                }
-            </style>
-
-            <div class="dmx-calculator-switch">
-                <a class="active" href="<?php echo esc_url($base_url); ?>">Calculator Tools</a>
-                <a href="<?php echo esc_url($inspection_url); ?>">Inspection Forms</a>
-            </div>
-
-            <div class="dmx-calculator-native-head">
-                <h2>DoorMatrix Tools</h2>
-                <p>Choose a calculator tool. Inspection forms, hazard assessments, and site checks are kept separately under Inspections.</p>
-            </div>
-
-            <div class="dmx-calculator-card-grid">
-                <?php foreach ($tools as $tool_key => $item) : ?>
-                    <a class="dmx-calculator-card <?php echo esc_attr($item['class']); ?>" href="<?php echo esc_url(add_query_arg('dmx_tool', $tool_key, $base_url)); ?>">
-                        <span class="kicker"><?php echo esc_html($item['kicker']); ?></span>
-                        <h3><?php echo esc_html($item['title']); ?></h3>
-                        <p><?php echo esc_html($item['summary']); ?></p>
-                    </a>
-                <?php endforeach; ?>
-            </div>
-
-            <div class="dmx-calculator-note">
-                <strong>Tools cleanup:</strong> This menu is calculator-only. Door reports, quick safety assessments, hazard assessments, and site checks are opened from Inspections.
-            </div>
+        <div class="dmx-calculators-tab">
+            <?php if (!empty($markup)) : ?>
+                <?php echo $markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+            <?php else : ?>
+                <div class="dmx-card dmx-card-soft">
+                    <h3>Spring calculator could not load right now.</h3>
+                    <p>
+                        <a class="button button-primary" href="https://garagedoorspringcalculator.com/" target="_blank" rel="noopener noreferrer">Open spring calculator</a>
+                    </p>
+                </div>
+            <?php endif; ?>
         </div>
         <?php
         return ob_get_clean();
