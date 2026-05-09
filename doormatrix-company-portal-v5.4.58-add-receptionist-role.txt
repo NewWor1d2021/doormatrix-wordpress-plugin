@@ -58,10 +58,10 @@ class DoorMatrix_Company_Portal {
         add_filter('authenticate', array($this, 'block_unapproved_portal_login'), 30, 3);
         add_action('wp_login_failed', array($this, 'handle_wp_login_failed_audit'));
         add_filter('show_admin_bar', array($this, 'maybe_hide_front_admin_bar'), 20);
-        add_filter('pre_get_document_title', array($this, 'filter_portal_document_title'), 20);
-        add_filter('document_title_parts', array($this, 'filter_portal_document_title_parts'), 20);
+        add_filter('pre_get_document_title', array($this, 'filter_portal_document_title'), 99);
+        add_filter('document_title_parts', array($this, 'filter_portal_document_title_parts'), 99);
         add_action('wp_head', array($this, 'render_portal_browser_branding_head'), 5);
-        add_action('wp_head', array($this, 'render_public_site_social_branding_head'), 999);
+        add_action('wp_head', array($this, 'render_public_site_social_branding_head'), 99);
         add_filter('get_site_icon_url', array($this, 'filter_public_site_icon_url'), 20, 3);
 
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -197,19 +197,25 @@ class DoorMatrix_Company_Portal {
     }
 
     public function filter_portal_document_title($title) {
-        if (!$this->is_frontend_portal_page()) {
+        if ($this->is_frontend_portal_page()) {
+            return $this->get_portal_browser_title();
+        }
+
+        if (!$this->is_public_marketing_page()) {
             return $title;
         }
 
-        return $this->get_portal_browser_title();
+        return 'DoorMatrix';
     }
 
     public function filter_portal_document_title_parts($parts) {
-        if (!$this->is_frontend_portal_page()) {
+        if ($this->is_frontend_portal_page()) {
+            $parts['title'] = $this->get_portal_browser_title();
+        } elseif ($this->is_public_marketing_page()) {
+            $parts['title'] = 'DoorMatrix';
+        } else {
             return $parts;
         }
-
-        $parts['title'] = $this->get_portal_browser_title();
 
         if (isset($parts['site'])) {
             unset($parts['site']);
@@ -2257,12 +2263,12 @@ class DoorMatrix_Company_Portal {
         return array(
             'title' => 'DoorMatrix',
             'description' => 'Garage door business software for quoting, invoicing, scheduling, inspections, inventory, and customer management.',
-            'image' => 'https://doormatrix.ca/wp-content/uploads/2024/11/cropped-DoorMatrix-Logo-512.png',
+            'image' => 'https://doormatrix.ca/wp-content/uploads/2026/04/ChatGPT-Image-Apr-1-2026-07_43_49-PM-e1775148933417.png',
         );
     }
 
     private function is_public_marketing_page() {
-        if (is_admin() || $this->is_frontend_portal_page()) {
+        if (is_admin()) {
             return false;
         }
 
@@ -2277,11 +2283,7 @@ class DoorMatrix_Company_Portal {
             return false;
         }
 
-        if (is_front_page() || is_home() || is_page()) {
-            return true;
-        }
-
-        return false;
+        return true;
     }
 
     private function get_public_branding_image_url() {
@@ -2321,7 +2323,7 @@ class DoorMatrix_Company_Portal {
         }
 
         $defaults = $this->get_public_branding_defaults();
-        $title = $defaults['title'];
+        $title = $this->is_frontend_portal_page() ? $this->get_portal_browser_title() : $defaults['title'];
         $description = $defaults['description'];
         $image_url = $this->get_public_branding_image_url();
         $canonical_url = home_url(add_query_arg(array(), $GLOBALS['wp']->request ?? ''));
