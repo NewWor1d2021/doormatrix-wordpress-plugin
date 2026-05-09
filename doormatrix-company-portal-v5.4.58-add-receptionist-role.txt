@@ -61,7 +61,7 @@ class DoorMatrix_Company_Portal {
         add_filter('pre_get_document_title', array($this, 'filter_portal_document_title'), 20);
         add_filter('document_title_parts', array($this, 'filter_portal_document_title_parts'), 20);
         add_action('wp_head', array($this, 'render_portal_browser_branding_head'), 5);
-        add_action('wp_head', array($this, 'render_public_site_social_branding_head'), 6);
+        add_action('wp_head', array($this, 'render_public_site_social_branding_head'), 999);
         add_filter('get_site_icon_url', array($this, 'filter_public_site_icon_url'), 20, 3);
 
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -2286,9 +2286,9 @@ class DoorMatrix_Company_Portal {
 
     private function get_public_branding_image_url() {
         $defaults = $this->get_public_branding_defaults();
-        $image_url = '';
+        $image_url = trim((string) ($defaults['image'] ?? ''));
 
-        if (function_exists('has_custom_logo') && has_custom_logo()) {
+        if ($image_url === '' && function_exists('has_custom_logo') && has_custom_logo()) {
             $custom_logo_id = (int) get_theme_mod('custom_logo');
             if ($custom_logo_id > 0) {
                 $custom_logo_url = wp_get_attachment_image_url($custom_logo_id, 'full');
@@ -2296,20 +2296,6 @@ class DoorMatrix_Company_Portal {
                     $image_url = trim($custom_logo_url);
                 }
             }
-        }
-
-        if ($image_url === '') {
-            $site_icon_id = (int) get_option('site_icon');
-            if ($site_icon_id > 0) {
-                $site_icon_url = wp_get_attachment_image_url($site_icon_id, 'full');
-                if (is_string($site_icon_url)) {
-                    $image_url = trim($site_icon_url);
-                }
-            }
-        }
-
-        if ($image_url === '') {
-            $image_url = $defaults['image'];
         }
 
         return esc_url_raw($image_url);
@@ -23330,46 +23316,44 @@ private function render_inspections_tab($is_admin = false) {
         <?php if ($view_customer) : ?>
             <?php echo $this->render_customer_detail_view($view_customer, $base_url, $can_manage_customer); ?>
         <?php else : ?>
+        <style>.dmx-customers-table-wrap .dmx-table th,.dmx-customers-table-wrap .dmx-table td{padding:7px 10px;font-size:13px;line-height:1.25;vertical-align:middle}.dmx-customers-table-wrap .dmx-customer-link{text-decoration:none;font-weight:600;color:#173b68}.dmx-customers-table-wrap .dmx-customer-link:hover{text-decoration:underline}</style>
         <div class="dmx-table-wrap dmx-customers-table-wrap">
             <table class="dmx-table">
                 <thead>
                     <tr>
                         <th>Customer #</th>
-                        <th>Customer / Company</th>
-                        <th>Contact</th>
-                        <th>Phone</th>
-                        <th>Email</th>
-                        <th>City</th>
-                        <th>Action</th>
+                        <th>Customer Name</th>
+                        <th>Business / Company Name</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($customers): foreach ($customers as $customer): ?>
                         <tr>
-                            <td><?php echo esc_html($this->ensure_customer_number($customer->ID)); ?></td>
-                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_company_name', true) ?: $customer->post_title); ?></td>
-                            <td><?php echo esc_html(trim((string) get_post_meta($customer->ID, '_dmx_customer_contact_name', true)) ?: $customer->post_title); ?></td>
-                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_phone', true)); ?></td>
-                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_email', true)); ?></td>
-                            <td><?php echo esc_html(get_post_meta($customer->ID, '_dmx_customer_city', true)); ?></td>
+                            <?php
+                                $customer_view_url = add_query_arg(array('dmx_view_customer' => $customer->ID), $base_url);
+                                $company_name = trim((string) get_post_meta($customer->ID, '_dmx_company_name', true));
+                                if ($company_name === '') {
+                                    $company_name = trim((string) $customer->post_title);
+                                }
+                                $first_name = trim((string) get_post_meta($customer->ID, '_dmx_customer_first_name', true));
+                                $last_name = trim((string) get_post_meta($customer->ID, '_dmx_customer_last_name', true));
+                                $full_name = trim($first_name . ' ' . $last_name);
+                                $contact_name = trim((string) get_post_meta($customer->ID, '_dmx_customer_contact_name', true));
+                                $customer_name = $full_name !== '' ? $full_name : $contact_name;
+                                if ($customer_name !== '' && $company_name !== '' && strcasecmp($customer_name, $company_name) === 0) {
+                                    $customer_name = '';
+                                }
+                            ?>
+                            <td><a class="dmx-customer-link" href="<?php echo esc_url($customer_view_url); ?>"><?php echo esc_html($this->ensure_customer_number($customer->ID)); ?></a></td>
                             <td>
-                                <div class="dmx-action-row" style="gap:6px;">
-                                        <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(add_query_arg(array('dmx_view_customer' => $customer->ID), $base_url)); ?>">View</a>
-                                    <?php if ($can_manage_customer) : ?>
-                                        <a class="dmx-btn dmx-btn-secondary" href="<?php echo esc_url(add_query_arg(array('dmx_edit_customer' => $customer->ID), $base_url)); ?>#dmx-edit-customer">Edit</a>
-                                        <form method="post" onsubmit="return confirm('Move this customer to trash?');" style="display:inline-flex;margin:0;">
-                                            <?php wp_nonce_field('dmx_portal_submit', 'dmx_nonce'); ?>
-                                            <input type="hidden" name="dmx_portal_action" value="delete_customer">
-                                            <input type="hidden" name="dmx_tab" value="customers">
-                                            <input type="hidden" name="customer_id" value="<?php echo esc_attr($customer->ID); ?>">
-                                            <button type="submit" class="dmx-btn dmx-btn-secondary">Delete</button>
-                                        </form>
-                                    <?php endif; ?>
-                                </div>
+                                <?php if ($customer_name !== '') : ?>
+                                    <a class="dmx-customer-link" href="<?php echo esc_url($customer_view_url); ?>"><?php echo esc_html($customer_name); ?></a>
+                                <?php else : ?>—<?php endif; ?>
                             </td>
+                            <td><a class="dmx-customer-link" href="<?php echo esc_url($customer_view_url); ?>"><?php echo esc_html($company_name !== '' ? $company_name : '—'); ?></a></td>
                         </tr>
                     <?php endforeach; else: ?>
-                        <tr><td colspan="7"><div class="dmx-empty">No customers found yet.</div></td></tr>
+                        <tr><td colspan="3"><div class="dmx-empty">No customers found yet.</div></td></tr>
                     <?php endif; ?>
                 </tbody>
             </table>
