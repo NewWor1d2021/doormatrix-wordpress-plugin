@@ -61,6 +61,8 @@ class DoorMatrix_Company_Portal {
         add_filter('pre_get_document_title', array($this, 'filter_portal_document_title'), 20);
         add_filter('document_title_parts', array($this, 'filter_portal_document_title_parts'), 20);
         add_action('wp_head', array($this, 'render_portal_browser_branding_head'), 5);
+        add_action('wp_head', array($this, 'render_public_site_social_branding_head'), 6);
+        add_filter('get_site_icon_url', array($this, 'filter_public_site_icon_url'), 20, 3);
 
         add_action('admin_menu', array($this, 'register_admin_menu'));
         add_action('pre_get_users', array($this, 'filter_wordpress_users_hide_portal_users'));
@@ -2249,6 +2251,114 @@ class DoorMatrix_Company_Portal {
         return;
     }
 
+
+
+    private function get_public_branding_defaults() {
+        return array(
+            'title' => 'DoorMatrix',
+            'description' => 'Garage door business software for quoting, invoicing, scheduling, inspections, inventory, and customer management.',
+            'image' => 'https://doormatrix.ca/wp-content/uploads/2024/11/cropped-DoorMatrix-Logo-512.png',
+        );
+    }
+
+    private function is_public_marketing_page() {
+        if (is_admin() || $this->is_frontend_portal_page()) {
+            return false;
+        }
+
+        if (!function_exists('home_url') || !function_exists('wp_parse_url')) {
+            return false;
+        }
+
+        $home_host = (string) wp_parse_url(home_url('/'), PHP_URL_HOST);
+        $request_host = isset($_SERVER['HTTP_HOST']) ? sanitize_text_field((string) wp_unslash($_SERVER['HTTP_HOST'])) : '';
+
+        if ($home_host === '' || $request_host === '' || strcasecmp($home_host, $request_host) !== 0) {
+            return false;
+        }
+
+        if (is_front_page() || is_home() || is_page()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function get_public_branding_image_url() {
+        $defaults = $this->get_public_branding_defaults();
+        $image_url = '';
+
+        if (function_exists('has_custom_logo') && has_custom_logo()) {
+            $custom_logo_id = (int) get_theme_mod('custom_logo');
+            if ($custom_logo_id > 0) {
+                $custom_logo_url = wp_get_attachment_image_url($custom_logo_id, 'full');
+                if (is_string($custom_logo_url)) {
+                    $image_url = trim($custom_logo_url);
+                }
+            }
+        }
+
+        if ($image_url === '') {
+            $site_icon_id = (int) get_option('site_icon');
+            if ($site_icon_id > 0) {
+                $site_icon_url = wp_get_attachment_image_url($site_icon_id, 'full');
+                if (is_string($site_icon_url)) {
+                    $image_url = trim($site_icon_url);
+                }
+            }
+        }
+
+        if ($image_url === '') {
+            $image_url = $defaults['image'];
+        }
+
+        return esc_url_raw($image_url);
+    }
+
+    public function filter_public_site_icon_url($url, $size, $blog_id) {
+        if (!$this->is_public_marketing_page()) {
+            return $url;
+        }
+
+        $branding_image = $this->get_public_branding_image_url();
+
+        if ($branding_image === '') {
+            return $url;
+        }
+
+        return $branding_image;
+    }
+
+    public function render_public_site_social_branding_head() {
+        if (!$this->is_public_marketing_page()) {
+            return;
+        }
+
+        $defaults = $this->get_public_branding_defaults();
+        $title = $defaults['title'];
+        $description = $defaults['description'];
+        $image_url = $this->get_public_branding_image_url();
+        $canonical_url = home_url(add_query_arg(array(), $GLOBALS['wp']->request ?? ''));
+
+        if (function_exists('is_singular') && is_singular()) {
+            $canonical_url = get_permalink();
+        }
+
+        $canonical_url = esc_url($canonical_url);
+
+        echo "\n" . '<meta property="og:title" content="' . esc_attr($title) . '" />' . "\n";
+        echo '<meta property="og:description" content="' . esc_attr($description) . '" />' . "\n";
+        echo '<meta property="og:image" content="' . esc_url($image_url) . '" />' . "\n";
+        echo '<meta property="og:url" content="' . $canonical_url . '" />' . "\n";
+        echo '<meta property="og:type" content="website" />' . "\n";
+        echo '<meta name="twitter:card" content="summary_large_image" />' . "\n";
+        echo '<meta name="twitter:title" content="' . esc_attr($title) . '" />' . "\n";
+        echo '<meta name="twitter:description" content="' . esc_attr($description) . '" />' . "\n";
+        echo '<meta name="twitter:image" content="' . esc_url($image_url) . '" />' . "\n";
+        echo '<link rel="icon" href="' . esc_url($image_url) . '" />' . "\n";
+        echo '<link rel="shortcut icon" href="' . esc_url($image_url) . '" />' . "\n";
+        echo '<link rel="apple-touch-icon" href="' . esc_url($image_url) . '" />' . "\n";
+    }
     public function filter_wordpress_users_hide_portal_users($query) {
         if (!is_admin() || !current_user_can('manage_options')) {
             return;
