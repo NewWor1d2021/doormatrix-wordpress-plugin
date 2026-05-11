@@ -27061,22 +27061,50 @@ private function render_inspections_tab($is_admin = false) {
     }
 
     private function render_calculators_tab($is_admin = false) {
-        unset($is_admin);
-        $markup = $this->get_remote_calculator_markup();
+        $tool = sanitize_key((string) ($_GET['dmx_tool'] ?? ''));
+
+        if ($tool === 'spring_calculators') {
+            return $this->render_spring_calculator_embed();
+        }
+
+        $base_url = $is_admin
+            ? admin_url('admin.php?page=' . self::MENU_SLUG . '&dmx_tab=calculators')
+            : $this->portal_url(array('dmx_tab' => 'calculators'));
+        $calculator_url = add_query_arg('dmx_tool', 'spring_calculators', $base_url);
+        $inspection_base = $is_admin
+            ? admin_url('admin.php?page=' . self::MENU_SLUG . '&dmx_tab=inspections')
+            : $this->portal_url(array('dmx_tab' => 'inspections'));
 
         ob_start();
         ?>
         <div class="dmx-calculators-tab">
-            <?php if (!empty($markup)) : ?>
-                <?php echo $markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-            <?php else : ?>
-                <div class="dmx-card dmx-card-soft">
-                    <h3>Spring calculator could not load right now.</h3>
-                    <p>
-                        <a class="button button-primary" href="https://garagedoorspringcalculator.com/" target="_blank" rel="noopener noreferrer">Open spring calculator</a>
-                    </p>
+            <div class="dmx-page-head">
+                <div>
+                    <h3>Tools</h3>
+                    <p>Choose a calculator or inspection form.</p>
                 </div>
-            <?php endif; ?>
+            </div>
+
+            <div class="dmx-tools-section">
+                <h4>Calculator Tools</h4>
+                <div class="dmx-tools-cards-grid">
+                    <?php foreach (array('Spring Builder', 'Spring Conversion', 'Springs by IPPT', 'Weight Calculator', 'Cable Length') as $calculator_label) : ?>
+                        <a class="dmx-tools-square-card" href="<?php echo esc_url($calculator_url); ?>">
+                            <span><?php echo esc_html($calculator_label); ?></span>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <div class="dmx-tools-section">
+                <h4>Inspection Forms</h4>
+                <div class="dmx-tools-cards-grid">
+                    <a class="dmx-tools-square-card" href="<?php echo esc_url(add_query_arg('dmx_subtab', 'detailed', $inspection_base)); ?>"><span>Detailed Door Report</span></a>
+                    <a class="dmx-tools-square-card" href="<?php echo esc_url(add_query_arg('dmx_subtab', 'quick', $inspection_base)); ?>"><span>Quick Safety Assessment</span></a>
+                    <a class="dmx-tools-square-card" href="<?php echo esc_url(add_query_arg('dmx_subtab', 'hazard_assessments', $inspection_base)); ?>"><span>Hazard Assessment</span></a>
+                    <a class="dmx-tools-square-card" href="<?php echo esc_url(add_query_arg('dmx_subtab', 'site_check', $inspection_base)); ?>"><span>Site Check Form</span></a>
+                </div>
+            </div>
         </div>
         <?php
         return ob_get_clean();
@@ -27143,6 +27171,11 @@ private function render_inspections_tab($is_admin = false) {
         .dmx-tools-card{background:#fff;border:1px solid #dfe8f2;border-radius:18px;padding:22px;box-shadow:0 10px 22px rgba(15,39,74,.05);}
         .dmx-tools-card h4{margin:0 0 10px;color:#102844;font-size:22px;line-height:1.15;}
         .dmx-tools-card p{margin:0 0 18px;color:#5d7088;font-size:14px;line-height:1.65;}
+        .dmx-tools-section{margin-top:18px;}
+        .dmx-tools-section h4{margin:0 0 12px;color:#102844;font-size:18px;}
+        .dmx-tools-cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;}
+        .dmx-tools-square-card{aspect-ratio:1/1;border-radius:20px;border:1px solid #dfe8f2;background:#fff;padding:16px;display:flex;align-items:center;justify-content:center;text-align:center;text-decoration:none;color:#173253;font-weight:800;box-shadow:0 10px 22px rgba(15,39,74,.05);}
+        .dmx-tools-square-card:hover,.dmx-tools-square-card:focus{border-color:#173b68;color:#173b68;box-shadow:0 12px 24px rgba(15,39,74,.12);}
         .dmx-tools-standard-note{margin-top:14px;padding:14px 16px;border-radius:14px;background:#f8fbff;border:1px solid #d9e8f4;color:#4f6480;font-size:13px;line-height:1.6;}
         .dmx-hazard-task-safety-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;align-items:start;}
         .dmx-hazard-equipment-mini{display:grid;gap:7px;padding:10px 12px;border:1px solid #cfdae6;border-radius:12px;background:#fff;min-height:45px;box-sizing:border-box;}
@@ -27183,6 +27216,7 @@ private function render_inspections_tab($is_admin = false) {
         .dmx-hazard-history-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
         .dmx-hazard-history-meta span{display:inline-flex;padding:6px 9px;border-radius:999px;background:#eef4fa;color:#173b68;font-size:12px;font-weight:800;}
         @media(max-width:980px){.dmx-tools-grid{grid-template-columns:1fr}.dmx-hazard-risk-help{grid-template-columns:1fr}.dmx-hazard-check-grid{grid-template-columns:1fr}.dmx-hazard-task-safety-grid{grid-template-columns:1fr}.dmx-hazard-signature-grid{grid-template-columns:1fr}}
+        @media(max-width:560px){.dmx-tools-cards-grid{grid-template-columns:1fr}}
         ';
     }
 
